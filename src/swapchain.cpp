@@ -1,10 +1,11 @@
 #include "swapchain.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
-#include <array>
+
 
 namespace vke {
 
@@ -120,19 +121,21 @@ static void create_swapchain_khr(SwapchainState &state, const DeviceState &dev,
   state.extent = extent;
 }
 
-static VkFormat find_depth_format(const DeviceState& dev) {
-  return device::find_supported_format(dev,
-      {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
-      VK_IMAGE_TILING_OPTIMAL,
-      VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
-  );
+static VkFormat find_depth_format(const DeviceState &dev) {
+  return device::find_supported_format(
+      dev,
+      {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT,
+       VK_FORMAT_D24_UNORM_S8_UINT},
+      VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
 }
 
-static void create_depth_resources(SwapchainState &state, const DeviceState &dev) {
+static void create_depth_resources(SwapchainState &state,
+                                   const DeviceState &dev) {
   state.depthFormat = find_depth_format(dev);
 
-  device::create_image(dev, state.extent.width, state.extent.height, state.depthFormat,
-                       VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+  device::create_image(dev, state.extent.width, state.extent.height,
+                       state.depthFormat, VK_IMAGE_TILING_OPTIMAL,
+                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, state.depthImage,
                        state.depthImageMemory);
 
@@ -147,7 +150,8 @@ static void create_depth_resources(SwapchainState &state, const DeviceState &dev
   viewInfo.subresourceRange.baseArrayLayer = 0;
   viewInfo.subresourceRange.layerCount = 1;
 
-  if (vkCreateImageView(dev.device, &viewInfo, nullptr, &state.depthImageView) != VK_SUCCESS) {
+  if (vkCreateImageView(dev.device, &viewInfo, nullptr,
+                        &state.depthImageView) != VK_SUCCESS) {
     throw std::runtime_error("failed to create depth image view!");
   }
 }
@@ -196,7 +200,8 @@ static void create_render_pass(SwapchainState &state, VkDevice device) {
   depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
   depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
   depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  depthAttachment.finalLayout =
+      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
   VkAttachmentReference depthAttachmentRef{};
   depthAttachmentRef.attachment = 1;
@@ -210,13 +215,17 @@ static void create_render_pass(SwapchainState &state, VkDevice device) {
 
   VkSubpassDependency dependency = {};
   dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-  dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+  dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
   dependency.srcAccessMask = 0;
   dependency.dstSubpass = 0;
-  dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-  dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+  dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-  std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+  std::array<VkAttachmentDescription, 2> attachments = {colorAttachment,
+                                                        depthAttachment};
   VkRenderPassCreateInfo renderPassInfo = {};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
   renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -236,7 +245,8 @@ static void create_framebuffers(SwapchainState &state, VkDevice device) {
   size_t count = state.images.size();
   state.framebuffers.resize(count);
   for (size_t i = 0; i < count; i++) {
-    std::array<VkImageView, 2> attachments = {state.imageViews[i], state.depthImageView};
+    std::array<VkImageView, 2> attachments = {state.imageViews[i],
+                                              state.depthImageView};
 
     VkFramebufferCreateInfo framebufferInfo = {};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -313,7 +323,7 @@ void recreate(SwapchainState &state, const DeviceState &dev,
     vkDestroyImageView(dev.device, view, nullptr);
   }
   state.imageViews.clear();
-  
+
   vkDestroyImageView(dev.device, state.depthImageView, nullptr);
   vkDestroyImage(dev.device, state.depthImage, nullptr);
   vkFreeMemory(dev.device, state.depthImageMemory, nullptr);

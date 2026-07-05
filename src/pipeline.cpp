@@ -106,14 +106,34 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
             const char *vertPath, const char *fragPath) {
   // Create pipeline layout
   VkPushConstantRange pushConstantRange{};
-  pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  pushConstantRange.stageFlags =
+      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
   pushConstantRange.offset = 0;
-  pushConstantRange.size = 84; // mat4 + vec4 + int
+  pushConstantRange.size = sizeof(PushConstantData);
+
+  // Create descriptor set layout
+  VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+  samplerLayoutBinding.binding = 0;
+  samplerLayoutBinding.descriptorCount = 1;
+  samplerLayoutBinding.descriptorType =
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  samplerLayoutBinding.pImmutableSamplers = nullptr;
+  samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+  VkDescriptorSetLayoutCreateInfo layoutInfoDSL{};
+  layoutInfoDSL.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfoDSL.bindingCount = 1;
+  layoutInfoDSL.pBindings = &samplerLayoutBinding;
+
+  if (vkCreateDescriptorSetLayout(device, &layoutInfoDSL, nullptr,
+                                  &state.descriptorSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create descriptor set layout!");
+  }
 
   VkPipelineLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  layoutInfo.setLayoutCount = 0;
-  layoutInfo.pSetLayouts = nullptr;
+  layoutInfo.setLayoutCount = 1;
+  layoutInfo.pSetLayouts = &state.descriptorSetLayout;
   layoutInfo.pushConstantRangeCount = 1;
   layoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -153,7 +173,8 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
   VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
   vertexInputInfo.sType =
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-  vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+  vertexInputInfo.vertexAttributeDescriptionCount =
+      static_cast<uint32_t>(attributeDescriptions.size());
   vertexInputInfo.vertexBindingDescriptionCount = 1;
   vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
   vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
@@ -193,6 +214,7 @@ void destroy(PipelineState &state, VkDevice device) {
   vkDestroyShaderModule(device, state.fragModule, nullptr);
   vkDestroyPipeline(device, state.pipeline, nullptr);
   vkDestroyPipelineLayout(device, state.layout, nullptr);
+  vkDestroyDescriptorSetLayout(device, state.descriptorSetLayout, nullptr);
 }
 
 void bind(const PipelineState &state, VkCommandBuffer cmd) {

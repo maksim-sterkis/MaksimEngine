@@ -5,7 +5,18 @@
 #include <string>
 #include <vector>
 
+#include <glm/glm.hpp>
+
 namespace vke {
+
+struct PushConstantData {
+  glm::mat4 mvp;
+  glm::vec4 colorOverride;
+  int useOverride;
+  int useTriplanar;
+  int hasTexture;
+  int padding[9];
+};
 
 struct PipelineConfigInfo {
   VkPipelineViewportStateCreateInfo viewportInfo;
@@ -27,6 +38,7 @@ struct PipelineState {
   VkPipelineLayout layout = VK_NULL_HANDLE;
   VkShaderModule vertModule = VK_NULL_HANDLE;
   VkShaderModule fragModule = VK_NULL_HANDLE;
+  VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
 };
 
 namespace pipeline {

@@ -32,6 +32,7 @@ struct EngineState {
   SwapchainState swapchain;
   PipelineState pipeline;
   ImguiState imgui;
+  VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
   std::vector<VkCommandBuffer> commandBuffers;
 
   AspectMode aspectMode = AspectMode::ULTRAWIDE;

@@ -42,8 +42,9 @@ void set_mode(WindowState &state, WindowMode mode) {
   GLFWmonitor *monitor = glfwGetPrimaryMonitor();
   const GLFWvidmode *vidmode = glfwGetVideoMode(monitor);
 
-  // If currently fullscreen, we must detach from the monitor before modifying window attributes
-  // to prevent GLFW state from getting confused when moving between windowed and exclusive fullscreen.
+  // If currently fullscreen, we must detach from the monitor before modifying
+  // window attributes to prevent GLFW state from getting confused when moving
+  // between windowed and exclusive fullscreen.
   if (state.currentMode == WindowMode::FULLSCREEN) {
     glfwSetWindowMonitor(state.handle, nullptr, 0, 0, vidmode->width,
                          vidmode->height, 0);

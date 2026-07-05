@@ -58,16 +58,16 @@ VkFormat find_supported_format(const DeviceState &state,
                                VkFormatFeatureFlags features);
 
 // Buffer utilities
-void create_buffer(const DeviceState &state, VkDeviceSize size, VkBufferUsageFlags usage,
-                   VkMemoryPropertyFlags properties, VkBuffer &buffer,
-                   VkDeviceMemory &bufferMemory);
-void copy_buffer(const DeviceState &state, VkBuffer srcBuffer, VkBuffer dstBuffer,
-                 VkDeviceSize size);
+void create_buffer(const DeviceState &state, VkDeviceSize size,
+                   VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
+                   VkBuffer &buffer, VkDeviceMemory &bufferMemory);
+void copy_buffer(const DeviceState &state, VkBuffer srcBuffer,
+                 VkBuffer dstBuffer, VkDeviceSize size);
 
 void create_image(const DeviceState &state, uint32_t width, uint32_t height,
-                  VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
-                  VkMemoryPropertyFlags properties, VkImage &image,
-                  VkDeviceMemory &imageMemory);
+                  VkFormat format, VkImageTiling tiling,
+                  VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
+                  VkImage &image, VkDeviceMemory &imageMemory);
 
 } // namespace device
 } // namespace vke

@@ -418,16 +418,17 @@ VkFormat find_supported_format(const DeviceState &state,
   throw std::runtime_error("failed to find supported format!");
 }
 
-void create_buffer(const DeviceState &state, VkDeviceSize size, VkBufferUsageFlags usage,
-                   VkMemoryPropertyFlags properties, VkBuffer &buffer,
-                   VkDeviceMemory &bufferMemory) {
+void create_buffer(const DeviceState &state, VkDeviceSize size,
+                   VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
+                   VkBuffer &buffer, VkDeviceMemory &bufferMemory) {
   VkBufferCreateInfo bufferInfo{};
   bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   bufferInfo.size = size;
   bufferInfo.usage = usage;
   bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-  if (vkCreateBuffer(state.device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+  if (vkCreateBuffer(state.device, &bufferInfo, nullptr, &buffer) !=
+      VK_SUCCESS) {
     throw std::runtime_error("failed to create buffer!");
   }
 
@@ -437,17 +438,19 @@ void create_buffer(const DeviceState &state, VkDeviceSize size, VkBufferUsageFla
   VkMemoryAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   allocInfo.allocationSize = memRequirements.size;
-  allocInfo.memoryTypeIndex = find_memory_type(state, memRequirements.memoryTypeBits, properties);
+  allocInfo.memoryTypeIndex =
+      find_memory_type(state, memRequirements.memoryTypeBits, properties);
 
-  if (vkAllocateMemory(state.device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+  if (vkAllocateMemory(state.device, &allocInfo, nullptr, &bufferMemory) !=
+      VK_SUCCESS) {
     throw std::runtime_error("failed to allocate buffer memory!");
   }
 
   vkBindBufferMemory(state.device, buffer, bufferMemory, 0);
 }
 
-void copy_buffer(const DeviceState &state, VkBuffer srcBuffer, VkBuffer dstBuffer,
-                 VkDeviceSize size) {
+void copy_buffer(const DeviceState &state, VkBuffer srcBuffer,
+                 VkBuffer dstBuffer, VkDeviceSize size) {
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -481,9 +484,9 @@ void copy_buffer(const DeviceState &state, VkBuffer srcBuffer, VkBuffer dstBuffe
 }
 
 void create_image(const DeviceState &state, uint32_t width, uint32_t height,
-                  VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
-                  VkMemoryPropertyFlags properties, VkImage &image,
-                  VkDeviceMemory &imageMemory) {
+                  VkFormat format, VkImageTiling tiling,
+                  VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
+                  VkImage &image, VkDeviceMemory &imageMemory) {
   VkImageCreateInfo imageInfo{};
   imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -509,9 +512,11 @@ void create_image(const DeviceState &state, uint32_t width, uint32_t height,
   VkMemoryAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   allocInfo.allocationSize = memRequirements.size;
-  allocInfo.memoryTypeIndex = find_memory_type(state, memRequirements.memoryTypeBits, properties);
+  allocInfo.memoryTypeIndex =
+      find_memory_type(state, memRequirements.memoryTypeBits, properties);
 
-  if (vkAllocateMemory(state.device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
+  if (vkAllocateMemory(state.device, &allocInfo, nullptr, &imageMemory) !=
+      VK_SUCCESS) {
     throw std::runtime_error("failed to allocate image memory!");
   }
 

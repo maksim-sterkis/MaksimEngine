@@ -1,3 +1,5 @@
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 cmake_minimum_required(VERSION 3.20)
 project(VK_game_engine)
 
@@ -50,6 +52,32 @@ FetchContent_Declare(
   GIT_TAG        0.9.9.8
 )
 FetchContent_MakeAvailable(glm)
+
+FetchContent_Declare(
+  tinyobjloader
+  GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+  GIT_TAG        release
+)
+FetchContent_MakeAvailable(tinyobjloader)
+
+FetchContent_Declare(
+  ktx
+  GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+  GIT_TAG        v4.3.1
+)
+set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TOOLS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_DOC OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(ktx)
+FetchContent_Declare(
+  stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG        master
+)
+FetchContent_Populate(stb)
+
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -64,6 +92,19 @@ target_link_libraries(imgui PRIVATE Vulkan::Vulkan glfw)
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cpp" "*.h" "*.hpp")
 list(FILTER SOURCES EXCLUDE REGEX "${CMAKE_BINARY_DIR}/")
+list(FILTER SOURCES EXCLUDE REGEX "tools/")
 add_executable(${PROJECT_NAME} ${SOURCES} ${SPIRV_SHADERS})
-target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan::Vulkan glfw imgui glm)
+target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan::Vulkan glfw imgui glm tinyobjloader ktx)
 target_include_directories(${PROJECT_NAME} PRIVATE src game)
+
+add_executable(texture_compiler tools/texture_compiler.cpp)
+target_include_directories(texture_compiler PRIVATE ${stb_SOURCE_DIR})
+target_link_libraries(texture_compiler PRIVATE ktx)
+
+add_custom_target(run_texture_compiler
+    COMMAND texture_compiler
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Compiling textures..."
+    DEPENDS texture_compiler
+)
+add_dependencies(${PROJECT_NAME} run_texture_compiler)

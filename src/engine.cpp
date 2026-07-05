@@ -179,6 +179,23 @@ void init(EngineState &state, const EngineConfig &config) {
                    state.swapchain.renderPass, config.vertexShaderPath,
                    config.fragmentShaderPath);
   allocate_command_buffers(state);
+
+  VkDescriptorPoolSize poolSize{};
+  poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  poolSize.descriptorCount = 100;
+
+  VkDescriptorPoolCreateInfo poolInfo{};
+  poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  poolInfo.poolSizeCount = 1;
+  poolInfo.pPoolSizes = &poolSize;
+  poolInfo.maxSets = 100;
+  poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+
+  if (vkCreateDescriptorPool(state.device.device, &poolInfo, nullptr,
+                             &state.descriptorPool) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create descriptor pool!");
+  }
+
   gui::init(state.imgui, state);
 }
 
@@ -187,10 +204,11 @@ void run(EngineState &state, UpdateCallback update_fn, DrawCallback draw_fn) {
 
   while (!window::should_close(state.window)) {
     glfwPollEvents();
-    
+
     double current_time = glfwGetTime();
     float dt = static_cast<float>(current_time - last_time);
-    if (dt > 0.1f) dt = 0.1f; // Cap dt at 10 FPS to prevent physics explosions
+    if (dt > 0.1f)
+      dt = 0.1f; // Cap dt at 10 FPS to prevent physics explosions
     last_time = current_time;
 
     gui::begin_frame();
@@ -202,6 +220,7 @@ void run(EngineState &state, UpdateCallback update_fn, DrawCallback draw_fn) {
 }
 
 void cleanup(EngineState &state) {
+  vkDestroyDescriptorPool(state.device.device, state.descriptorPool, nullptr);
   gui::destroy(state.imgui, state.device.device);
   pipeline::destroy(state.pipeline, state.device.device);
   swapchain::destroy(state.swapchain, state.device.device);
