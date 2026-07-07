@@ -66,7 +66,7 @@ FetchContent_Declare(
   GIT_TAG        v4.3.1
 )
 set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
-set(KTX_FEATURE_TOOLS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TOOLS ON CACHE BOOL "" FORCE)
 set(KTX_FEATURE_DOC OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
@@ -77,6 +77,14 @@ FetchContent_Declare(
   GIT_TAG        master
 )
 FetchContent_Populate(stb)
+
+FetchContent_Declare(
+  fastgltf
+  GIT_REPOSITORY https://github.com/spnda/fastgltf.git
+  GIT_TAG        main
+)
+set(FASTGLTF_ENABLE_DEPRECATED_CODE OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(fastgltf)
 
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -94,8 +102,8 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cpp" "*.h" "*.hpp")
 list(FILTER SOURCES EXCLUDE REGEX "${CMAKE_BINARY_DIR}/")
 list(FILTER SOURCES EXCLUDE REGEX "tools/")
 add_executable(${PROJECT_NAME} ${SOURCES} ${SPIRV_SHADERS})
-target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan::Vulkan glfw imgui glm tinyobjloader ktx)
-target_include_directories(${PROJECT_NAME} PRIVATE src game)
+target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan::Vulkan glfw imgui glm tinyobjloader ktx fastgltf::fastgltf)
+target_include_directories(${PROJECT_NAME} PRIVATE src game ${stb_SOURCE_DIR})
 
 add_executable(texture_compiler tools/texture_compiler.cpp)
 target_include_directories(texture_compiler PRIVATE ${stb_SOURCE_DIR})
@@ -108,3 +116,15 @@ add_custom_target(run_texture_compiler
     DEPENDS texture_compiler
 )
 add_dependencies(${PROJECT_NAME} run_texture_compiler)
+
+add_executable(model_compiler tools/model_compiler.cpp)
+target_include_directories(model_compiler PRIVATE ${stb_SOURCE_DIR})
+target_link_libraries(model_compiler PRIVATE tinyobjloader fastgltf::fastgltf ktx)
+
+add_custom_target(run_model_compiler
+    COMMAND model_compiler
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Compiling models..."
+    DEPENDS model_compiler
+)
+add_dependencies(${PROJECT_NAME} run_model_compiler)

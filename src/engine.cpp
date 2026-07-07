@@ -180,20 +180,42 @@ void init(EngineState &state, const EngineConfig &config) {
                    config.fragmentShaderPath);
   allocate_command_buffers(state);
 
-  VkDescriptorPoolSize poolSize{};
-  poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  poolSize.descriptorCount = 100;
+  std::array<VkDescriptorPoolSize, 2> poolSizes{};
+  poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  poolSizes[0].descriptorCount = 100000;
+  poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  poolSizes[1].descriptorCount = 100;
 
   VkDescriptorPoolCreateInfo poolInfo{};
   poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  poolInfo.poolSizeCount = 1;
-  poolInfo.pPoolSizes = &poolSize;
-  poolInfo.maxSets = 100;
-  poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+  poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+  poolInfo.pPoolSizes = poolSizes.data();
+  poolInfo.maxSets = 10;
+  poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
   if (vkCreateDescriptorPool(state.device.device, &poolInfo, nullptr,
                              &state.descriptorPool) != VK_SUCCESS) {
     throw std::runtime_error("failed to create descriptor pool!");
+  }
+
+  // Allocate Global Descriptor Set
+  VkDescriptorSetAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  allocInfo.descriptorPool = state.descriptorPool;
+  allocInfo.descriptorSetCount = 1;
+  allocInfo.pSetLayouts = &state.pipeline.descriptorSetLayout;
+
+  // We must define how many descriptors we are actually allocating for the unbounded array
+  uint32_t maxBinding = 100000;
+  VkDescriptorSetVariableDescriptorCountAllocateInfo variableAllocInfo{};
+  variableAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
+  variableAllocInfo.descriptorSetCount = 1;
+  variableAllocInfo.pDescriptorCounts = &maxBinding;
+  allocInfo.pNext = &variableAllocInfo;
+
+  if (vkAllocateDescriptorSets(state.device.device, &allocInfo,
+                               &state.globalDescriptorSet) != VK_SUCCESS) {
+    throw std::runtime_error("failed to allocate global descriptor set!");
   }
 
   gui::init(state.imgui, state);

@@ -4,9 +4,10 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
-#include <tiny_obj_loader.h>
-#include <unordered_map>
-
+#include <fastgltf/core.hpp>
+#include <fastgltf/tools.hpp>
+#include <fastgltf/types.hpp>
+#include <filesystem>
 
 namespace vke {
 
@@ -158,93 +159,112 @@ void draw(VkCommandBuffer commandBuffer, const ModelData &model) {
   }
 }
 
-bool load_obj(DeviceState &deviceState, const std::string &filepath,
-              bool force_palette_colors, ModelData &outModel) {
-  tinyobj::attrib_t attrib;
-  std::vector<tinyobj::shape_t> shapes;
-  std::vector<tinyobj::material_t> materials;
-  std::string warn, err;
+bool load_glb(DeviceState &deviceState, const std::string &filepath, ModelData &outModel) {
+  fastgltf::Parser parser(fastgltf::Extensions::KHR_texture_basisu);
+  auto data = fastgltf::GltfDataBuffer::FromPath(std::filesystem::path(filepath));
+  if (data.error() != fastgltf::Error::None) {
+    std::cerr << "Failed to load GLB: " << filepath << " Error: " << fastgltf::getErrorMessage(data.error()) << "\n";
+    return false;
+  }
 
-  if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err,
-                        filepath.c_str())) {
-    std::cerr << "failed to open OBJ file: " << filepath << " Error: " << warn
-              << err << "\n";
+  auto asset = parser.loadGltfBinary(data.get(), std::filesystem::path(filepath).parent_path(), fastgltf::Options::LoadGLBBuffers | fastgltf::Options::LoadExternalBuffers);
+  if (asset.error() != fastgltf::Error::None) {
+    std::cerr << "Failed to parse GLB: " << filepath << " Error: " << fastgltf::getErrorMessage(asset.error()) << "\n";
     return false;
   }
 
   std::vector<Vertex> vertices;
   std::vector<uint32_t> indices;
-  std::unordered_map<Vertex, uint32_t> uniqueVertices;
 
-  // Palette of colors for the faces
-  glm::vec3 faceColors[] = {
-      {1.0f, 0.0f, 0.0f}, // Red
-      {0.0f, 1.0f, 0.0f}, // Green
-      {0.0f, 0.0f, 1.0f}, // Blue
-      {1.0f, 1.0f, 0.0f}, // Yellow
-      {1.0f, 0.0f, 1.0f}, // Magenta
-      {0.0f, 1.0f, 1.0f}  // Cyan
-  };
-  int vertexIndex = 0;
+  for (const auto& mesh : asset.get().meshes) {
+    for (const auto& prim : mesh.primitives) {
+      auto initialVertex = vertices.size();
 
-  for (const auto &shape : shapes) {
-    for (size_t i = 0; i < shape.mesh.indices.size(); i += 3) {
-      Vertex v[3];
-      for (int j = 0; j < 3; j++) {
-        auto index = shape.mesh.indices[i + j];
-
-        v[j].position = {attrib.vertices[3 * index.vertex_index + 0],
-                         attrib.vertices[3 * index.vertex_index + 1],
-                         attrib.vertices[3 * index.vertex_index + 2]};
-
-        if (index.texcoord_index >= 0) {
-          v[j].uv = {
-              attrib.texcoords[2 * index.texcoord_index + 0],
-              1.0f - attrib.texcoords[2 * index.texcoord_index +
-                                      1] // Vulkan flips Y
-          };
-        } else {
-          v[j].uv = {0.0f, 0.0f};
-        }
-
-        if (index.normal_index >= 0) {
-          v[j].normal = {attrib.normals[3 * index.normal_index + 0],
-                         attrib.normals[3 * index.normal_index + 1],
-                         attrib.normals[3 * index.normal_index + 2]};
-        }
-
-        if (!force_palette_colors &&
-            attrib.colors.size() > 3 * index.vertex_index + 2) {
-          v[j].color = {attrib.colors[3 * index.vertex_index + 0],
-                        attrib.colors[3 * index.vertex_index + 1],
-                        attrib.colors[3 * index.vertex_index + 2]};
-        } else {
-          v[j].color = faceColors[(vertexIndex / 3) % 6];
-        }
-        vertexIndex++;
+      auto posIt = prim.findAttribute("POSITION");
+      if (posIt != prim.attributes.end()) {
+        auto& posAccessor = asset.get().accessors[posIt->accessorIndex];
+        vertices.resize(initialVertex + posAccessor.count);
+        
+        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(asset.get(), posAccessor, [&](fastgltf::math::fvec3 pos, std::size_t idx) {
+          vertices[initialVertex + idx].position = {pos.x(), pos.y(), pos.z()};
+          vertices[initialVertex + idx].color = {1.0f, 1.0f, 1.0f};
+          vertices[initialVertex + idx].normal = {1.0f, 0.0f, 0.0f};
+          vertices[initialVertex + idx].uv = {0.0f, 0.0f};
+        });
       }
 
-      // Compute flat normal if missing
-      if (shape.mesh.indices[i].normal_index < 0) {
-        glm::vec3 e1 = v[1].position - v[0].position;
-        glm::vec3 e2 = v[2].position - v[0].position;
-        glm::vec3 normal = glm::normalize(glm::cross(e1, e2));
-        v[0].normal = normal;
-        v[1].normal = normal;
-        v[2].normal = normal;
+      auto normIt = prim.findAttribute("NORMAL");
+      if (normIt != prim.attributes.end()) {
+        auto& normAccessor = asset.get().accessors[normIt->accessorIndex];
+        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(asset.get(), normAccessor, [&](fastgltf::math::fvec3 norm, std::size_t idx) {
+          vertices[initialVertex + idx].normal = {norm.x(), norm.y(), norm.z()};
+        });
       }
 
-      for (int j = 0; j < 3; j++) {
-        if (uniqueVertices.count(v[j]) == 0) {
-          uniqueVertices[v[j]] = static_cast<uint32_t>(vertices.size());
-          vertices.push_back(v[j]);
-        }
-        indices.push_back(uniqueVertices[v[j]]);
+      auto colIt = prim.findAttribute("COLOR_0");
+      if (colIt != prim.attributes.end()) {
+        auto& colAccessor = asset.get().accessors[colIt->accessorIndex];
+        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(asset.get(), colAccessor, [&](fastgltf::math::fvec3 col, std::size_t idx) {
+          vertices[initialVertex + idx].color = {col.x(), col.y(), col.z()};
+        });
+      }
+
+      auto uvIt = prim.findAttribute("TEXCOORD_0");
+      if (uvIt != prim.attributes.end()) {
+        auto& uvAccessor = asset.get().accessors[uvIt->accessorIndex];
+        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(asset.get(), uvAccessor, [&](fastgltf::math::fvec2 uv, std::size_t idx) {
+          vertices[initialVertex + idx].uv = {uv.x(), uv.y()};
+        });
+      }
+
+      if (prim.indicesAccessor.has_value()) {
+        auto initialIndex = indices.size();
+        auto& idxAccessor = asset.get().accessors[prim.indicesAccessor.value()];
+        indices.resize(initialIndex + idxAccessor.count);
+        fastgltf::iterateAccessorWithIndex<uint32_t>(asset.get(), idxAccessor, [&](uint32_t idx, std::size_t i) {
+          indices[initialIndex + i] = idx + initialVertex;
+        });
       }
     }
   }
 
   create(deviceState, vertices, indices, outModel);
+
+  for (const auto& image : asset.get().images) {
+    std::vector<uint8_t> imgBytes;
+    std::visit(fastgltf::visitor{
+      [&](const fastgltf::sources::BufferView& view) {
+        auto& bufferView = asset.get().bufferViews[view.bufferViewIndex];
+        auto& buffer = asset.get().buffers[bufferView.bufferIndex];
+        std::visit(fastgltf::visitor{
+          [&](auto& data) {
+            if constexpr (requires { data.bytes; }) {
+                auto* ptr = reinterpret_cast<const uint8_t*>(data.bytes.data());
+                imgBytes.assign(ptr + bufferView.byteOffset, 
+                                ptr + bufferView.byteOffset + bufferView.byteLength);
+            } else {
+                std::cerr << "DEBUG: Unhandled buffer data variant! index=" << buffer.data.index() << "\n";
+            }
+          }
+        }, buffer.data);
+      },
+      [&](auto& data) {
+        if constexpr (requires { data.bytes; }) {
+            auto* ptr = reinterpret_cast<const uint8_t*>(data.bytes.data());
+            imgBytes.assign(ptr, ptr + data.bytes.size());
+        } else {
+            std::cerr << "DEBUG: Unhandled image source variant! index=" << image.data.index() << "\n";
+        }
+      }
+    }, image.data);
+    
+    if (imgBytes.empty()) {
+        std::cerr << "DEBUG: imgBytes is empty for image " << image.name << " (variant index " << image.data.index() << ")\n";
+    }
+    
+    outModel.rawImages.push_back(std::move(imgBytes));
+  }
+
   return true;
 }
 

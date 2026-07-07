@@ -128,7 +128,7 @@ static void create_instance(DeviceState &state) {
   appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
   appInfo.pEngineName = "No Engine";
   appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-  appInfo.apiVersion = VK_API_VERSION_1_0;
+  appInfo.apiVersion = VK_API_VERSION_1_2;
 
   VkInstanceCreateInfo createInfo = {};
   createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -315,14 +315,26 @@ static void create_logical_device(DeviceState &state) {
   }
 #endif
 
-  VkPhysicalDeviceFeatures deviceFeatures = {};
+  VkPhysicalDeviceVulkan12Features vulkan12Features = {};
+  vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  vulkan12Features.descriptorBindingPartiallyBound = VK_TRUE;
+  vulkan12Features.runtimeDescriptorArray = VK_TRUE;
+  vulkan12Features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+  vulkan12Features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+  vulkan12Features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+
+  VkPhysicalDeviceFeatures2 physicalDeviceFeatures2 = {};
+  physicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  physicalDeviceFeatures2.pNext = &vulkan12Features;
+  // Note: we can query supported features here with vkGetPhysicalDeviceFeatures2, but we assume RTX 3090 supports it.
 
   VkDeviceCreateInfo createInfo = {};
   createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  createInfo.pNext = &physicalDeviceFeatures2;
   createInfo.queueCreateInfoCount =
       static_cast<uint32_t>(queueCreateInfos.size());
   createInfo.pQueueCreateInfos = queueCreateInfos.data();
-  createInfo.pEnabledFeatures = &deviceFeatures;
+  createInfo.pEnabledFeatures = nullptr; // Ignored when using pNext chain
   createInfo.enabledExtensionCount =
       static_cast<uint32_t>(enabledExtensions.size());
   createInfo.ppEnabledExtensionNames = enabledExtensions.data();

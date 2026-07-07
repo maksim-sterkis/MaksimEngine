@@ -19,6 +19,10 @@ struct TextureData {
 namespace texture {
 bool load_ktx2(DeviceState &deviceState, const std::string &filepath,
                TextureData &outTexture);
+bool load_ktx2_from_memory(DeviceState &deviceState, const uint8_t* data, size_t size,
+                           TextureData &outTexture);
+bool load_image_from_memory(DeviceState &deviceState, const uint8_t* data, size_t size,
+                            TextureData &outTexture);
 bool create_fallback(DeviceState &deviceState, TextureData &outTexture);
 void destroy(DeviceState &deviceState, TextureData &texture);
 } // namespace texture

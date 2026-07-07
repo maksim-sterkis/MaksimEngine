@@ -60,6 +60,8 @@ struct ModelData {
   VkBuffer indexBuffer = VK_NULL_HANDLE;
   VkDeviceMemory indexBufferMemory = VK_NULL_HANDLE;
   bool hasIndexBuffer = false;
+
+  std::vector<std::vector<uint8_t>> rawImages;
 };
 
 namespace model {
@@ -69,10 +71,7 @@ void destroy(DeviceState &deviceState, ModelData &model);
 void bind(VkCommandBuffer commandBuffer, const ModelData &model);
 void draw(VkCommandBuffer commandBuffer, const ModelData &model);
 
-// force_palette_colors will override the tinyobjloader default white colors
-// with a face palette
-bool load_obj(DeviceState &deviceState, const std::string &filepath,
-              bool force_palette_colors, ModelData &outModel);
+bool load_glb(DeviceState &deviceState, const std::string &filepath, ModelData &outModel);
 } // namespace model
 
 } // namespace vke

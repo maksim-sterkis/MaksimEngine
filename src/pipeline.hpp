@@ -15,7 +15,9 @@ struct PushConstantData {
   int useOverride;
   int useTriplanar;
   int hasTexture;
-  int padding[9];
+  int debugColors;
+  int textureIndex;
+  int padding[7];
 };
 
 struct PipelineConfigInfo {

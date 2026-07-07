@@ -13,13 +13,17 @@ layout(location = 4) out vec2 fragUV_X;
 layout(location = 5) out vec2 fragUV_Y;
 layout(location = 6) out vec2 fragUV_Z;
 
+layout(location = 7) out flat int fragPrimitiveID;
+
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
     vec4 colorOverride;
     int useOverride;
     int useTriplanar;
     int hasTexture;
-    int padding[9];
+    int debugColors;
+    int textureIndex;
+    int padding[7];
 } push;
 
 void main() {
@@ -39,4 +43,5 @@ void main() {
     fragUV_X = inPosition.yz * scale + vec2(0.5);
     fragUV_Y = inPosition.xz * scale + vec2(0.5);
     fragUV_Z = inPosition.xy * scale + vec2(0.5);
+    fragPrimitiveID = gl_VertexIndex / 3;
 }

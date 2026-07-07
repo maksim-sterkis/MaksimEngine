@@ -21,13 +21,14 @@ using namespace vke;
 int triangle_color_idx = 0;
 bool triangle_follow_mouse = false;
 
-int current_view = 1; // 1 = Triangle, 2 = Cube
+int current_view = 3; // 1 = Triangle, 2 = Cube, 3 = Boulder
 float camera_distance = 3.0f;
 
 vke::AssetPool asset_pool;
 vke::Registry ecs_registry;
 vke::Entity triangle_entity;
 vke::Entity cube_entity;
+vke::Entity boulder_entity;
 
 vke::CameraState camera_state;
 bool pointer_locked = false;
@@ -50,6 +51,7 @@ void update_game(EngineState &state, float dt) {
   static bool prev_mouse_left = false;
   static bool prev_key_1 = false;
   static bool prev_key_2 = false;
+  static bool prev_key_3 = false;
   static bool prev_key_p = false;
 
   bool curr_space = input::is_key_pressed(state.input, GLFW_KEY_SPACE);
@@ -57,6 +59,7 @@ void update_game(EngineState &state, float dt) {
       input::is_mouse_pressed(state.input, GLFW_MOUSE_BUTTON_LEFT);
   bool curr_key_1 = input::is_key_pressed(state.input, GLFW_KEY_1);
   bool curr_key_2 = input::is_key_pressed(state.input, GLFW_KEY_2);
+  bool curr_key_3 = input::is_key_pressed(state.input, GLFW_KEY_3);
   bool curr_key_p = input::is_key_pressed(state.input, GLFW_KEY_P);
 
   static double last_mx = 0.0, last_my = 0.0;
@@ -127,8 +130,10 @@ void update_game(EngineState &state, float dt) {
     current_view = 1;
   if (curr_key_2 && !prev_key_2)
     current_view = 2;
+  if (curr_key_3 && !prev_key_3)
+    current_view = 3;
 
-  if (current_view == 2) {
+  if (current_view != 1) {
     double scroll = input::get_scroll(state.input);
     camera_distance -= scroll * 0.5f;
     if (camera_distance < 1.0f)
@@ -165,6 +170,7 @@ void update_game(EngineState &state, float dt) {
   prev_mouse_left = curr_mouse_left;
   prev_key_1 = curr_key_1;
   prev_key_2 = curr_key_2;
+  prev_key_3 = curr_key_3;
   prev_key_p = curr_key_p;
 
   static bool show_ui = false;
@@ -175,8 +181,8 @@ void update_game(EngineState &state, float dt) {
   if (show_ui) {
     ImGui::Begin("Engine Debug");
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-    ImGui::Text("Mode: %s (Press 1 or 2 to switch)",
-                current_view == 1 ? "Triangle" : "Cube");
+    ImGui::Text("Mode: %s (Press 1, 2, or 3 to switch)",
+                current_view == 1 ? "Triangle" : (current_view == 2 ? "Cube" : "Boulder"));
     ImGui::Text("Mouse: (%.1f, %.1f)", mx, my);
     ImGui::Separator();
     int mode = static_cast<int>(state.aspectMode);
@@ -264,6 +270,13 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
 
   vke::PushConstantData push{};
 
+  // Bind Global Descriptor Set
+  if (state.globalDescriptorSet != VK_NULL_HANDLE) {
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              state.pipeline.layout, 0, 1,
+                              &state.globalDescriptorSet, 0, nullptr);
+  }
+
   for (vke::Entity e : ecs_registry.active_entities) {
     vke::Transform *transform = vke::ecs::get_transform(ecs_registry, e);
     vke::MeshRenderer *mesh = vke::ecs::get_mesh_renderer(ecs_registry, e);
@@ -274,6 +287,8 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
     if (current_view == 1 && e != triangle_entity)
       continue;
     if (current_view == 2 && e != cube_entity)
+      continue;
+    if (current_view == 3 && e != boulder_entity)
       continue;
 
     glm::mat4 model_mat = transform->get_matrix();
@@ -304,9 +319,9 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
       glm::mat4 proj;
       if (state.aspectMode == AspectMode::FIXED) {
         proj =
-            glm::perspective(glm::radians(45.0f), targetAspect, 0.1f, 100.0f);
+            glm::perspective(glm::radians(45.0f), targetAspect, 0.01f, 100.0f);
       } else {
-        proj = glm::perspective(glm::radians(45.0f), winAspect, 0.1f, 100.0f);
+        proj = glm::perspective(glm::radians(45.0f), winAspect, 0.01f, 100.0f);
       }
       proj[1][1] *= -1;
 
@@ -315,24 +330,10 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
       push.useOverride = 0;
     }
 
-    const vke::TextureData *texData = nullptr;
-    if (mesh->texture_handle != 0) {
-      texData = vke::asset::get_texture(asset_pool, mesh->texture_handle);
-    } else {
-      texData = vke::asset::get_texture(asset_pool,
-                                        asset_pool.default_texture_handle);
-    }
-
-    if (texData != nullptr && texData->descriptorSet != VK_NULL_HANDLE) {
-      push.hasTexture = (mesh->texture_handle != 0) ? 1 : 0;
-      push.useTriplanar = mesh->use_triplanar ? 1 : 0;
-      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              state.pipeline.layout, 0, 1,
-                              &texData->descriptorSet, 0, nullptr);
-    } else {
-      push.hasTexture = 0;
-      push.useTriplanar = 0;
-    }
+    push.textureIndex = (mesh->texture_handle != 0) ? mesh->texture_handle : asset_pool.default_texture_handle;
+    push.hasTexture = (mesh->texture_handle != 0) ? 1 : 0;
+    push.useTriplanar = mesh->use_triplanar ? 1 : 0;
+    push.debugColors = (mesh->texture_handle == 0) ? 1 : 0;
 
     vkCmdPushConstants(cmd, state.pipeline.layout,
                        VK_SHADER_STAGE_VERTEX_BIT |
@@ -367,20 +368,20 @@ int main() {
 
     // Init Default Texture (fixes Vulkan validation errors)
     vke::asset::init_default_texture(asset_pool, engineState.device,
-                                     engineState.descriptorPool,
-                                     engineState.pipeline.descriptorSetLayout);
+                                     engineState.globalDescriptorSet);
 
     // Init Camera
     vke::camera::init(camera_state, glm::vec3(0.0f, 0.0f, 3.0f));
 
     // Load Assets
     uint32_t triangle_mesh = vke::asset::load_model(
-        asset_pool, engineState.device, "assets/obj/triangle.obj", false);
+        asset_pool, engineState.device, engineState.globalDescriptorSet, "assets/models/glb/triangle.glb");
     uint32_t cube_mesh = vke::asset::load_model(asset_pool, engineState.device,
-                                                "assets/obj/cube.obj", true);
+                                                engineState.globalDescriptorSet, "assets/models/glb/cube.glb");
+    uint32_t boulder_mesh = vke::asset::load_model(asset_pool, engineState.device,
+                                                   engineState.globalDescriptorSet, "assets/models/glb/boulder_01_1k.glb");
     uint32_t test_texture = vke::asset::load_texture(
-        asset_pool, engineState.device, engineState.descriptorPool,
-        engineState.pipeline.descriptorSetLayout,
+        asset_pool, engineState.device, engineState.globalDescriptorSet,
         "assets/textures/ktx2/test.ktx2");
 
     // Setup ECS Entities
@@ -393,6 +394,11 @@ int main() {
     vke::ecs::add_mesh_renderer(ecs_registry, cube_entity,
                                 {cube_mesh, test_texture, true});
     vke::ecs::add_transform(ecs_registry, cube_entity, {glm::vec3(0.0f)});
+
+    boulder_entity = vke::ecs::create_entity(ecs_registry);
+    vke::ecs::add_mesh_renderer(ecs_registry, boulder_entity,
+                                {boulder_mesh, 0, false});
+    vke::ecs::add_transform(ecs_registry, boulder_entity, {glm::vec3(0.0f)});
 
     engine::run(engineState, update_game, draw_scene);
 
