@@ -17,6 +17,12 @@ struct AssetPool {
   std::vector<TextureData> textures;
   std::unordered_map<std::string, uint32_t> texture_registry;
   uint32_t default_texture_handle = 0;
+
+  std::vector<Material> allMaterials;
+  VkBuffer materialSSBO = VK_NULL_HANDLE;
+  VkDeviceMemory materialSSBOMemory = VK_NULL_HANDLE;
+  void* materialSSBOMapped = nullptr;
+  uint32_t currentSSBOCapacity = 0;
 };
 
 namespace asset {
@@ -38,6 +44,9 @@ uint32_t load_texture(AssetPool &pool, DeviceState &deviceState,
 const TextureData *get_texture(const AssetPool &pool, uint32_t handle);
 
 void cleanup(AssetPool &pool, DeviceState &deviceState);
+
+void build_materials_ssbo(AssetPool &pool, DeviceState &deviceState, VkDescriptorSet globalDescriptorSet);
+
 } // namespace asset
 
 } // namespace vke

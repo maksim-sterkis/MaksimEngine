@@ -8,13 +8,13 @@ A modern Vulkan game engine written in C++20, designed with next-generation rend
 - **Offline Asset Compiler**: Custom asset pipeline utilizing `fastgltf` and `tinyobjloader` to process `.obj` and `.gltf` source files into optimized, single-binary `.glb` payloads.
 - **Embedded Textures**: The compiler natively reads raw PBR texture files (JPEGs/PNGs) and packages them dynamically into the `.glb` buffers, resulting in clean, self-contained mesh payloads.
 - **Dynamic Asset Pool**: Robust texture and model pooling system preventing duplicate GPU uploads and seamlessly switching between raw JPEG/PNG loading (using `stb_image`) and compressed formats.
+- **PBR Materials**: Complete physical based rendering foundation with Cook-Torrance BRDF (Albedo, Normal, Metallic, Roughness) via SSBOs.
 
 ## Roadmap & Upcoming Features
 
-1. **PBR Materials**: Complete physical based rendering with Cook-Torrance BRDF (Albedo, Normal, Metallic, Roughness).
-2. **Mesh Shaders & Visibility Buffer**: Transition to `VK_EXT_mesh_shader` for high-performance sub-mesh geometry culling.
-3. **Hardware Ray Tracing**: Leverage `VK_KHR_ray_tracing_pipeline` (RT cores) for precise shadows, reflections, and ambient occlusion.
-4. **ReSTIR DI / GI**: State-of-the-art reservoir spatiotemporal importance resampling for real-time direct and global illumination.
+1. **Mesh Shaders & Visibility Buffer**: Transition to `VK_EXT_mesh_shader` for high-performance sub-mesh geometry culling.
+2. **Hardware Ray Tracing**: Leverage `VK_KHR_ray_tracing_pipeline` (RT cores) for precise shadows, reflections, and ambient occlusion.
+3. **ReSTIR DI / GI**: State-of-the-art reservoir spatiotemporal importance resampling for real-time direct and global illumination.
 
 ## Build Instructions
 

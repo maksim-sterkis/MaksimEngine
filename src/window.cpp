@@ -42,14 +42,6 @@ void set_mode(WindowState &state, WindowMode mode) {
   GLFWmonitor *monitor = glfwGetPrimaryMonitor();
   const GLFWvidmode *vidmode = glfwGetVideoMode(monitor);
 
-  // If currently fullscreen, we must detach from the monitor before modifying
-  // window attributes to prevent GLFW state from getting confused when moving
-  // between windowed and exclusive fullscreen.
-  if (state.currentMode == WindowMode::FULLSCREEN) {
-    glfwSetWindowMonitor(state.handle, nullptr, 0, 0, vidmode->width,
-                         vidmode->height, 0);
-  }
-
   if (mode == WindowMode::WINDOWED) {
     glfwSetWindowAttrib(state.handle, GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(state.handle, GLFW_AUTO_ICONIFY, GLFW_FALSE);
@@ -59,13 +51,8 @@ void set_mode(WindowState &state, WindowMode mode) {
   } else if (mode == WindowMode::BORDERLESS) {
     glfwSetWindowAttrib(state.handle, GLFW_DECORATED, GLFW_FALSE);
     glfwSetWindowAttrib(state.handle, GLFW_AUTO_ICONIFY, GLFW_FALSE);
-    glfwSetWindowPos(state.handle, 0, 0);
-    glfwSetWindowSize(state.handle, vidmode->width, vidmode->height);
-  } else if (mode == WindowMode::FULLSCREEN) {
-    glfwSetWindowAttrib(state.handle, GLFW_DECORATED, GLFW_FALSE);
-    glfwSetWindowAttrib(state.handle, GLFW_AUTO_ICONIFY, GLFW_TRUE);
-    glfwSetWindowMonitor(state.handle, monitor, 0, 0, vidmode->width,
-                         vidmode->height, vidmode->refreshRate);
+    glfwSetWindowMonitor(state.handle, nullptr, 0, 0, vidmode->width,
+                         vidmode->height, 0);
   }
 
   state.currentMode = mode;

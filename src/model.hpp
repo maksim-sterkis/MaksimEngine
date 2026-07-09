@@ -51,6 +51,23 @@ template <> struct hash<vke::Vertex> {
 
 namespace vke {
 
+struct Material {
+  int albedoTexIndex = -1;
+  int normalTexIndex = -1;
+  int metallicRoughnessTexIndex = -1;
+  int padding = 0;
+  glm::vec4 baseColorFactor = glm::vec4(1.0f);
+  float metallicFactor = 1.0f;
+  float roughnessFactor = 1.0f;
+  glm::vec2 padding2 = glm::vec2(0.0f);
+};
+
+struct SubMesh {
+  uint32_t indexOffset = 0;
+  uint32_t indexCount = 0;
+  uint32_t materialIndex = 0;
+};
+
 struct ModelData {
   uint32_t vertexCount = 0;
   VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -62,6 +79,9 @@ struct ModelData {
   bool hasIndexBuffer = false;
 
   std::vector<std::vector<uint8_t>> rawImages;
+  
+  std::vector<SubMesh> subMeshes;
+  std::vector<Material> materials;
 };
 
 namespace model {

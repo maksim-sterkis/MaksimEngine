@@ -210,15 +210,6 @@ void update_game(EngineState &state, float dt) {
       glfwPollEvents();
       engine::recreate_swapchain(state);
     }
-    if (ImGui::RadioButton("Fullscreen (Exclusive)", &window_mode,
-                           static_cast<int>(WindowMode::FULLSCREEN))) {
-      state.swapchain.disallowExclusive = false;
-      window::set_mode(state.window, WindowMode::FULLSCREEN);
-      state.swapchain.vsync = true;
-      glfwPollEvents();
-      engine::recreate_swapchain(state);
-    }
-
     if (state.window.currentMode != WindowMode::FULLSCREEN) {
       bool oldVsync = state.swapchain.vsync;
       if (ImGui::Checkbox("Vsync (FIFO)", &state.swapchain.vsync)) {
@@ -330,21 +321,23 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
       push.useOverride = 0;
     }
 
-    push.textureIndex = (mesh->texture_handle != 0) ? mesh->texture_handle : asset_pool.default_texture_handle;
-    push.hasTexture = (mesh->texture_handle != 0) ? 1 : 0;
-    push.useTriplanar = mesh->use_triplanar ? 1 : 0;
-    push.debugColors = (mesh->texture_handle == 0) ? 1 : 0;
-
-    vkCmdPushConstants(cmd, state.pipeline.layout,
-                       VK_SHADER_STAGE_VERTEX_BIT |
-                           VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(vke::PushConstantData), &push);
-
     const vke::ModelData *modelData =
         vke::asset::get_model(asset_pool, mesh->model_handle);
     if (modelData) {
       vke::model::bind(cmd, *modelData);
-      vke::model::draw(cmd, *modelData);
+      for (const auto& subMesh : modelData->subMeshes) {
+          push.materialIndex = subMesh.materialIndex;
+          vkCmdPushConstants(cmd, state.pipeline.layout,
+                             VK_SHADER_STAGE_VERTEX_BIT |
+                                 VK_SHADER_STAGE_FRAGMENT_BIT,
+                             0, sizeof(vke::PushConstantData), &push);
+          
+          if (modelData->hasIndexBuffer) {
+              vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexOffset, 0, 0);
+          } else {
+              vkCmdDraw(cmd, subMesh.indexCount, 1, subMesh.indexOffset, 0);
+          }
+      }
     }
   }
 }
@@ -383,6 +376,9 @@ int main() {
     uint32_t test_texture = vke::asset::load_texture(
         asset_pool, engineState.device, engineState.globalDescriptorSet,
         "assets/textures/ktx2/test.ktx2");
+
+    // Build Material SSBO
+    vke::asset::build_materials_ssbo(asset_pool, engineState.device, engineState.globalDescriptorSet);
 
     // Setup ECS Entities
     triangle_entity = vke::ecs::create_entity(ecs_registry);

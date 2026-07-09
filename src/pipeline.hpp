@@ -16,7 +16,7 @@ struct PushConstantData {
   int useTriplanar;
   int hasTexture;
   int debugColors;
-  int textureIndex;
+  uint32_t materialIndex;
   int padding[7];
 };
 

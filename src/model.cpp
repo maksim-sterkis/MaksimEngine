@@ -230,6 +230,53 @@ bool load_glb(DeviceState &deviceState, const std::string &filepath, ModelData &
 
   create(deviceState, vertices, indices, outModel);
 
+  for (const auto& mat : asset.get().materials) {
+      Material outMat;
+      if (mat.pbrData.baseColorTexture.has_value()) {
+          auto texIdx = mat.pbrData.baseColorTexture->textureIndex;
+          outMat.albedoTexIndex = asset.get().textures[texIdx].imageIndex.value_or(-1);
+      }
+      if (mat.normalTexture.has_value()) {
+          auto texIdx = mat.normalTexture->textureIndex;
+          outMat.normalTexIndex = asset.get().textures[texIdx].imageIndex.value_or(-1);
+      }
+      if (mat.pbrData.metallicRoughnessTexture.has_value()) {
+          auto texIdx = mat.pbrData.metallicRoughnessTexture->textureIndex;
+          outMat.metallicRoughnessTexIndex = asset.get().textures[texIdx].imageIndex.value_or(-1);
+      }
+      
+      outMat.baseColorFactor = glm::vec4(mat.pbrData.baseColorFactor[0], mat.pbrData.baseColorFactor[1], mat.pbrData.baseColorFactor[2], mat.pbrData.baseColorFactor[3]);
+      outMat.metallicFactor = mat.pbrData.metallicFactor;
+      outMat.roughnessFactor = mat.pbrData.roughnessFactor;
+      
+      outModel.materials.push_back(outMat);
+  }
+
+  if (outModel.materials.empty()) {
+      outModel.materials.push_back(Material{});
+  }
+
+  uint32_t currentSubMeshIndexOffset = 0;
+  for (const auto& mesh : asset.get().meshes) {
+      for (const auto& prim : mesh.primitives) {
+          SubMesh sub;
+          sub.materialIndex = prim.materialIndex.value_or(0);
+          if (prim.indicesAccessor.has_value()) {
+              auto& idxAccessor = asset.get().accessors[prim.indicesAccessor.value()];
+              sub.indexCount = idxAccessor.count;
+          } else {
+              auto posIt = prim.findAttribute("POSITION");
+              if (posIt != prim.attributes.end()) {
+                  auto& posAccessor = asset.get().accessors[posIt->accessorIndex];
+                  sub.indexCount = posAccessor.count;
+              }
+          }
+          sub.indexOffset = currentSubMeshIndexOffset;
+          currentSubMeshIndexOffset += sub.indexCount;
+          outModel.subMeshes.push_back(sub);
+      }
+  }
+
   for (const auto& image : asset.get().images) {
     std::vector<uint8_t> imgBytes;
     std::visit(fastgltf::visitor{

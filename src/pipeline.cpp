@@ -112,26 +112,38 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
   pushConstantRange.size = sizeof(PushConstantData);
 
   // Create descriptor set layout
+  VkDescriptorSetLayoutBinding materialSSBOLayoutBinding{};
+  materialSSBOLayoutBinding.binding = 0;
+  materialSSBOLayoutBinding.descriptorCount = 1;
+  materialSSBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  materialSSBOLayoutBinding.pImmutableSamplers = nullptr;
+  materialSSBOLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
   VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-  samplerLayoutBinding.binding = 0;
+  samplerLayoutBinding.binding = 1;
   samplerLayoutBinding.descriptorCount = 100000;
-  samplerLayoutBinding.descriptorType =
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   samplerLayoutBinding.pImmutableSamplers = nullptr;
   samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-  VkDescriptorBindingFlags bindingFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+  VkDescriptorSetLayoutBinding bindings[] = {materialSSBOLayoutBinding, samplerLayoutBinding};
+
+  VkDescriptorBindingFlags bindingFlags[2] = {
+      0, // No special flags for the SSBO
+      VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
+  };
+
   VkDescriptorSetLayoutBindingFlagsCreateInfo layoutFlags{};
   layoutFlags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-  layoutFlags.bindingCount = 1;
-  layoutFlags.pBindingFlags = &bindingFlags;
+  layoutFlags.bindingCount = 2;
+  layoutFlags.pBindingFlags = bindingFlags;
 
   VkDescriptorSetLayoutCreateInfo layoutInfoDSL{};
   layoutInfoDSL.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
   layoutInfoDSL.pNext = &layoutFlags;
   layoutInfoDSL.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-  layoutInfoDSL.bindingCount = 1;
-  layoutInfoDSL.pBindings = &samplerLayoutBinding;
+  layoutInfoDSL.bindingCount = 2;
+  layoutInfoDSL.pBindings = bindings;
 
   if (vkCreateDescriptorSetLayout(device, &layoutInfoDSL, nullptr,
                                   &state.descriptorSetLayout) != VK_SUCCESS) {

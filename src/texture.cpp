@@ -390,11 +390,11 @@ bool load_image_from_memory(DeviceState &deviceState, const uint8_t* data, size_
 
     stbi_image_free(pixels);
 
-    device::create_image(deviceState, texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outTexture.image, outTexture.imageMemory);
+    device::create_image(deviceState, texWidth, texHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outTexture.image, outTexture.imageMemory);
 
-    transition_image_layout(deviceState, outTexture.image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transition_image_layout(deviceState, outTexture.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     copy_buffer_to_image(deviceState, stagingBuffer, outTexture.image, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-    transition_image_layout(deviceState, outTexture.image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transition_image_layout(deviceState, outTexture.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     vkDestroyBuffer(deviceState.device, stagingBuffer, nullptr);
     vkFreeMemory(deviceState.device, stagingBufferMemory, nullptr);
@@ -403,7 +403,7 @@ bool load_image_from_memory(DeviceState &deviceState, const uint8_t* data, size_
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = outTexture.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;

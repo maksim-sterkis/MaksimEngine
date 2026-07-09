@@ -27,7 +27,7 @@ void init_default_texture(AssetPool &pool, DeviceState &deviceState,
   VkWriteDescriptorSet descriptorWrite{};
   descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
   descriptorWrite.dstSet = globalDescriptorSet;
-  descriptorWrite.dstBinding = 0;
+  descriptorWrite.dstBinding = 1;
   descriptorWrite.dstArrayElement = pool.default_texture_handle;
   descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   descriptorWrite.descriptorCount = 1;
@@ -45,6 +45,8 @@ uint32_t load_model(AssetPool &pool, DeviceState &deviceState,
 
   ModelData model;
   if (model::load_glb(deviceState, filepath, model)) {
+    std::vector<uint32_t> imageToHandle(model.rawImages.size(), 0);
+    uint32_t imgIndex = 0;
     for (const auto& imgBytes : model.rawImages) {
         TextureData tex;
         bool isKtx = false;
@@ -66,6 +68,7 @@ uint32_t load_model(AssetPool &pool, DeviceState &deviceState,
             tex.descriptorSet = globalDescriptorSet;
             pool.textures.push_back(tex);
             uint32_t handle = static_cast<uint32_t>(pool.textures.size());
+            imageToHandle[imgIndex] = handle;
 
             VkDescriptorImageInfo imageInfo{};
             imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -75,7 +78,7 @@ uint32_t load_model(AssetPool &pool, DeviceState &deviceState,
             VkWriteDescriptorSet descriptorWrite{};
             descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrite.dstSet = globalDescriptorSet;
-            descriptorWrite.dstBinding = 0;
+            descriptorWrite.dstBinding = 1;
             descriptorWrite.dstArrayElement = handle;
             descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             descriptorWrite.descriptorCount = 1;
@@ -83,6 +86,34 @@ uint32_t load_model(AssetPool &pool, DeviceState &deviceState,
 
             vkUpdateDescriptorSets(deviceState.device, 1, &descriptorWrite, 0, nullptr);
         }
+        imgIndex++;
+    }
+    
+    uint32_t baseMaterialIndex = static_cast<uint32_t>(pool.allMaterials.size());
+    for (auto& mat : model.materials) {
+        if (mat.albedoTexIndex >= 0 && mat.albedoTexIndex < (int)imageToHandle.size()) {
+            mat.albedoTexIndex = imageToHandle[mat.albedoTexIndex];
+        } else {
+            mat.albedoTexIndex = -1;
+        }
+
+        if (mat.normalTexIndex >= 0 && mat.normalTexIndex < (int)imageToHandle.size()) {
+            mat.normalTexIndex = imageToHandle[mat.normalTexIndex];
+        } else {
+            mat.normalTexIndex = -1;
+        }
+
+        if (mat.metallicRoughnessTexIndex >= 0 && mat.metallicRoughnessTexIndex < (int)imageToHandle.size()) {
+            mat.metallicRoughnessTexIndex = imageToHandle[mat.metallicRoughnessTexIndex];
+        } else {
+            mat.metallicRoughnessTexIndex = -1;
+        }
+        
+        pool.allMaterials.push_back(mat);
+    }
+    
+    for (auto& sub : model.subMeshes) {
+        sub.materialIndex += baseMaterialIndex;
     }
     
     pool.models.push_back(model);
@@ -125,7 +156,7 @@ uint32_t load_texture(AssetPool &pool, DeviceState &deviceState,
   VkWriteDescriptorSet descriptorWrite{};
   descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
   descriptorWrite.dstSet = globalDescriptorSet;
-  descriptorWrite.dstBinding = 0;
+  descriptorWrite.dstBinding = 1;
   descriptorWrite.dstArrayElement = handle;
   descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   descriptorWrite.descriptorCount = 1;
@@ -142,6 +173,73 @@ const TextureData *get_texture(const AssetPool &pool, uint32_t handle) {
   return &pool.textures[handle - 1];
 }
 
+void build_materials_ssbo(AssetPool &pool, DeviceState &deviceState, VkDescriptorSet globalDescriptorSet) {
+    if (pool.allMaterials.empty()) return;
+    
+    VkDeviceSize bufferSize = sizeof(Material) * pool.allMaterials.size();
+    
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(deviceState.device, &bufferInfo, nullptr, &pool.materialSSBO) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create material SSBO!");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(deviceState.device, pool.materialSSBO, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(deviceState.physicalDevice, &memProperties);
+
+    // Find memory type that is HOST_VISIBLE and HOST_COHERENT
+    uint32_t typeFilter = memRequirements.memoryTypeBits;
+    VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    uint32_t memoryTypeIndex = 0;
+    bool found = false;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            memoryTypeIndex = i;
+            found = true;
+            break;
+        }
+    }
+    if (!found) throw std::runtime_error("failed to find suitable memory type for material SSBO!");
+
+    allocInfo.memoryTypeIndex = memoryTypeIndex;
+
+    if (vkAllocateMemory(deviceState.device, &allocInfo, nullptr, &pool.materialSSBOMemory) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate material SSBO memory!");
+    }
+
+    vkBindBufferMemory(deviceState.device, pool.materialSSBO, pool.materialSSBOMemory, 0);
+
+    vkMapMemory(deviceState.device, pool.materialSSBOMemory, 0, bufferSize, 0, &pool.materialSSBOMapped);
+    memcpy(pool.materialSSBOMapped, pool.allMaterials.data(), (size_t)bufferSize);
+    
+    VkDescriptorBufferInfo bufferDescInfo{};
+    bufferDescInfo.buffer = pool.materialSSBO;
+    bufferDescInfo.offset = 0;
+    bufferDescInfo.range = bufferSize;
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = globalDescriptorSet;
+    descriptorWrite.dstBinding = 0; // Binding 0 for Materials
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferDescInfo;
+
+    vkUpdateDescriptorSets(deviceState.device, 1, &descriptorWrite, 0, nullptr);
+}
+
 void cleanup(AssetPool &pool, DeviceState &deviceState) {
   for (auto &model : pool.models) {
     model::destroy(deviceState, model);
@@ -154,6 +252,12 @@ void cleanup(AssetPool &pool, DeviceState &deviceState) {
   }
   pool.textures.clear();
   pool.texture_registry.clear();
+  if (pool.materialSSBO != VK_NULL_HANDLE) {
+      vkDestroyBuffer(deviceState.device, pool.materialSSBO, nullptr);
+      vkFreeMemory(deviceState.device, pool.materialSSBOMemory, nullptr);
+      pool.materialSSBO = VK_NULL_HANDLE;
+      pool.materialSSBOMemory = VK_NULL_HANDLE;
+  }
 }
 
 } // namespace vke::asset
