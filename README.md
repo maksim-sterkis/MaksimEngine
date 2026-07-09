@@ -54,3 +54,9 @@ To run the engine itself:
 - [GLFW](https://www.glfw.org/)
 - [GLM](https://github.com/g-truc/glm)
 - [Dear ImGui](https://github.com/ocornut/imgui)
+
+
+## Pictures
+
+<img width="2251" height="1185" alt="Screenshot 2026-07-09 175616" src="https://github.com/user-attachments/assets/225f0c4a-3c32-4cc7-9cf0-d51cf35c93ab" />
+
