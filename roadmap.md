@@ -31,13 +31,13 @@ This plan outlines the next major architectural upgrades for the engine, focusin
   3. Extracted and mapped multi-texture PBR payloads from GLB models dynamically to the Bindless array.
 
 ## Phase 3 (Meshlets & Visibility Buffer)
-- **Status**: ⏳ **PENDING**
+- **Status**: 🚧 **IN PROGRESS**
 - **Goal**: Replace legacy vertex pipelines with Task/Mesh shaders (`VK_EXT_mesh_shader`).
 - **Why**: Unlocks extreme GPU geometry culling (frustum, occlusion) at a sub-mesh granularity.
 - **Tasks**:
-  1. Write a compute shader or offline tool extension to partition `ModelData` into meshlets (max 64 vertices, 126 triangles).
-  2. Create Task and Mesh shaders to evaluate and output geometry.
-  3. Switch to a two-pass Visibility Buffer workflow to decouple geometry from heavy material evaluation.
+  1. ✅ Write a compute shader or offline tool extension to partition `ModelData` into meshlets (max 64 vertices, 126 triangles).
+  2. ✅ Create Task and Mesh shaders to evaluate and output geometry.
+  3. ⏳ Switch to a two-pass Visibility Buffer workflow to decouple geometry from heavy material evaluation.
 
 ## Phase 4 (Hardware Ray Tracing - RT Pipeline)
 - **Status**: ⏳ **PENDING**

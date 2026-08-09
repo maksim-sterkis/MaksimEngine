@@ -5,6 +5,17 @@ project(VK_game_engine)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if (MSVC)
+  add_compile_options(/W3 /WX)
+else()
+  add_compile_options(-Wall -Wextra -Wpedantic)
+  if (MINGW)
+    add_compile_options(-mstackrealign)
+    add_compile_options(-DSIMDJSON_IMPLEMENTATION_HASWELL=0)
+  endif()
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Vulkan REQUIRED)
@@ -15,14 +26,14 @@ if(NOT GLSLC)
     message(FATAL_ERROR "glslc not found. Please ensure Vulkan SDK is correctly installed.")
 endif()
 
-file(GLOB_RECURSE SHADERS "shaders/*.vert" "shaders/*.frag")
+file(GLOB_RECURSE SHADERS "shaders/*.vert" "shaders/*.frag" "shaders/*.task" "shaders/*.mesh")
 set(SPIRV_SHADERS "")
 foreach(SHADER ${SHADERS})
     get_filename_component(FILE_NAME ${SHADER} NAME)
     set(SPIRV "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${FILE_NAME}.spv")
     add_custom_command(
         OUTPUT ${SPIRV}
-        COMMAND ${GLSLC} ${SHADER} -o ${SPIRV}
+        COMMAND ${GLSLC} --target-env=vulkan1.3 ${SHADER} -o ${SPIRV}
         DEPENDS ${SHADER}
     )
     list(APPEND SPIRV_SHADERS ${SPIRV})
@@ -81,10 +92,17 @@ FetchContent_Populate(stb)
 FetchContent_Declare(
   fastgltf
   GIT_REPOSITORY https://github.com/spnda/fastgltf.git
-  GIT_TAG        main
+  GIT_TAG        v0.8.0
 )
 set(FASTGLTF_ENABLE_DEPRECATED_CODE OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fastgltf)
+
+FetchContent_Declare(
+  meshoptimizer
+  GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+  GIT_TAG        v0.21
+)
+FetchContent_MakeAvailable(meshoptimizer)
 
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -119,7 +137,7 @@ add_dependencies(${PROJECT_NAME} run_texture_compiler)
 
 add_executable(model_compiler tools/model_compiler.cpp)
 target_include_directories(model_compiler PRIVATE ${stb_SOURCE_DIR})
-target_link_libraries(model_compiler PRIVATE tinyobjloader fastgltf::fastgltf ktx)
+target_link_libraries(model_compiler PRIVATE tinyobjloader fastgltf::fastgltf ktx meshoptimizer)
 
 add_custom_target(run_model_compiler
     COMMAND model_compiler

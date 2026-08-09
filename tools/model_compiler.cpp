@@ -11,6 +11,7 @@
 #include <fastgltf/types.hpp>
 #include <fastgltf/tools.hpp>
 #include <ktx.h>
+#include <meshoptimizer.h>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -19,6 +20,141 @@
 #include <cmath>
 
 namespace fs = std::filesystem;
+
+// ---- Meshlet file format ----
+// Written as a sidecar .meshlet binary alongside the .glb
+
+struct MeshletBoundsGPU {
+    float center[3];
+    float radius;
+    float cone_axis[3];
+    float cone_cutoff;
+};
+
+struct MeshletFileHeader {
+    uint32_t magic;         // 'MESH' = 0x4853454D
+    uint32_t version;       // 1
+    uint32_t meshletCount;
+    uint32_t meshletVertexCount;
+    uint32_t meshletTriangleCount;
+    uint32_t vertexCount;   // total vertices in the original mesh
+    uint32_t indexCount;    // total indices in the original mesh
+    uint32_t padding;
+};
+
+static const uint32_t MESHLET_MAGIC = 0x4853454D; // "MESH" in little-endian
+
+// Generates meshlets from a flat vertex/index buffer and writes a .meshlet sidecar file.
+// vertexPositions: float3 positions (stride = sizeof(float)*3, or sizeof(Vertex) if interleaved)
+// vertexStride: byte stride between consecutive vertex positions
+void generate_meshlets(const float* vertexPositions, size_t vertexStride,
+                       size_t vertexCount,
+                       const uint32_t* indices, size_t indexCount,
+                       const std::string& outputPath) {
+    if (indexCount < 3 || vertexCount < 3) {
+        std::cout << "  Skipping meshlet generation (too few vertices/indices)\n";
+        return;
+    }
+
+    if (std::filesystem::exists(outputPath) && std::filesystem::file_size(outputPath) >= 12) {
+        std::ifstream check(outputPath, std::ios::binary | std::ios::ate);
+        if (check.is_open()) {
+            check.seekg(-4, std::ios::end);
+            char magic[5] = {0};
+            check.read(magic, 4);
+            if (std::string(magic) == "MESH") {
+                std::cout << "  GLB already contains meshlets, skipping append.\n";
+                return;
+            }
+        }
+    }
+
+    const size_t maxVertices = 64;
+    const size_t maxTriangles = 124;
+    const float coneWeight = 0.5f;
+
+    std::cout << "  Generating meshlets: " << vertexCount << " verts, " << indexCount << " indices\n";
+
+    size_t maxMeshlets = meshopt_buildMeshletsBound(indexCount, maxVertices, maxTriangles);
+
+    std::vector<meshopt_Meshlet> meshlets(maxMeshlets);
+    std::vector<uint32_t> meshletVertices(maxMeshlets * maxVertices);
+    std::vector<uint8_t> meshletTriangles(maxMeshlets * maxTriangles * 3);
+
+    size_t meshletCount = meshopt_buildMeshlets(
+        meshlets.data(), meshletVertices.data(), meshletTriangles.data(),
+        indices, indexCount,
+        vertexPositions, vertexCount, vertexStride,
+        maxVertices, maxTriangles, coneWeight);
+
+    if (meshletCount == 0) {
+        std::cerr << "  meshopt_buildMeshlets returned 0 meshlets, skipping.\n";
+        return;
+    }
+
+    // Trim to actual size
+    const meshopt_Meshlet& last = meshlets[meshletCount - 1];
+    size_t totalVertices = last.vertex_offset + last.vertex_count;
+    size_t totalTriangles = last.triangle_offset + ((last.triangle_count * 3 + 3) & ~3);
+    meshletVertices.resize(totalVertices);
+    meshletTriangles.resize(totalTriangles);
+    meshlets.resize(meshletCount);
+
+    // Compute bounds for each meshlet (bounding sphere + normal cone for culling)
+    std::vector<MeshletBoundsGPU> bounds(meshletCount);
+    for (size_t i = 0; i < meshletCount; ++i) {
+        meshopt_Bounds b = meshopt_computeMeshletBounds(
+            &meshletVertices[meshlets[i].vertex_offset],
+            &meshletTriangles[meshlets[i].triangle_offset],
+            meshlets[i].triangle_count,
+            vertexPositions, vertexCount, vertexStride);
+
+        bounds[i].center[0] = b.center[0];
+        bounds[i].center[1] = b.center[1];
+        bounds[i].center[2] = b.center[2];
+        bounds[i].radius = b.radius;
+        bounds[i].cone_axis[0] = b.cone_axis[0];
+        bounds[i].cone_axis[1] = b.cone_axis[1];
+        bounds[i].cone_axis[2] = b.cone_axis[2];
+        bounds[i].cone_cutoff = b.cone_cutoff;
+    }
+
+    // Write .meshlet file
+    MeshletFileHeader header{};
+    header.magic = MESHLET_MAGIC;
+    header.version = 1;
+    header.meshletCount = static_cast<uint32_t>(meshletCount);
+    header.meshletVertexCount = static_cast<uint32_t>(totalVertices);
+    header.meshletTriangleCount = static_cast<uint32_t>(totalTriangles);
+    header.vertexCount = static_cast<uint32_t>(vertexCount);
+    header.indexCount = static_cast<uint32_t>(indexCount);
+
+    // Get current file size
+    uint64_t startPos = std::filesystem::file_size(outputPath);
+
+    // Append to GLB file
+    std::ofstream out(outputPath, std::ios::binary | std::ios::app);
+    out.seekp(0, std::ios::end);
+
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    out.write(reinterpret_cast<const char*>(meshlets.data()), meshletCount * sizeof(meshopt_Meshlet));
+    out.write(reinterpret_cast<const char*>(meshletVertices.data()), totalVertices * sizeof(uint32_t));
+    out.write(reinterpret_cast<const char*>(meshletTriangles.data()), totalTriangles * sizeof(uint8_t));
+    out.write(reinterpret_cast<const char*>(bounds.data()), meshletCount * sizeof(MeshletBoundsGPU));
+    
+    std::streampos endPos = out.tellp();
+    uint64_t payloadSize = static_cast<uint64_t>(endPos) - startPos;
+
+    // Write footer (8 bytes: 64-bit size, then 4 byte magic "MESH")
+    // Wait, 8 + 4 = 12 bytes. So size is 8 bytes, magic is 4.
+    out.write(reinterpret_cast<const char*>(&payloadSize), sizeof(payloadSize));
+    out.write("MESH", 4);
+
+    out.close();
+
+    std::cout << "  Appended meshlets to GLB: " << meshletCount << " meshlets, "
+              << totalVertices << " vertices, payload size " << payloadSize << " bytes -> " << outputPath << "\n";
+}
 
 std::vector<std::byte> read_file_bytes(const std::string& inputPath) {
     std::ifstream file(inputPath, std::ios::binary | std::ios::ate);
@@ -33,21 +169,100 @@ std::vector<std::byte> read_file_bytes(const std::string& inputPath) {
 }
 
 void compile_gltf_model(const std::string& inputPath, const std::string& outputPath) {
-    fastgltf::Parser parser;
-    auto data = fastgltf::GltfDataBuffer::FromPath(inputPath);
-    if (data.error() != fastgltf::Error::None) {
-        std::cerr << "Failed to load GLTF data: " << inputPath << "\n";
+    std::cerr << "[compile_gltf_model] " << inputPath << "\n" << std::flush;
+    fastgltf::Parser parser(fastgltf::Extensions::KHR_texture_basisu);
+    
+    // Read file manually and pad to avoid simdjson AVX page boundary segfaults
+    auto fileBytes = read_file_bytes(inputPath);
+    if (fileBytes.empty()) {
+        std::cerr << "Failed to read GLTF file: " << inputPath << "\n";
         return;
     }
+    
+    size_t actualSize = fileBytes.size();
+    void* alignedPtr = _aligned_malloc(actualSize + 64, 64);
+    std::memcpy(alignedPtr, fileBytes.data(), actualSize);
+    std::memset(static_cast<std::byte*>(alignedPtr) + actualSize, 0, 64);
 
-    auto assetResult = parser.loadGltf(data.get(), std::filesystem::path(inputPath).parent_path(), fastgltf::Options::LoadExternalBuffers);
+    auto dataResult = fastgltf::GltfDataBuffer::FromBytes(static_cast<const std::byte*>(alignedPtr), actualSize);
+    if (dataResult.error() != fastgltf::Error::None) {
+        std::cerr << "Failed to create GLTF buffer from bytes\n";
+        _aligned_free(alignedPtr);
+        return;
+    }
+    auto& data = dataResult.get();
+
+    auto assetResult = parser.loadGltf(data, std::filesystem::path(inputPath).parent_path(), fastgltf::Options::LoadExternalBuffers);
+    _aligned_free(alignedPtr);
     if (assetResult.error() != fastgltf::Error::None) {
         std::cerr << "Failed to parse GLTF: " << inputPath << "\n";
         return;
     }
 
     auto& asset = assetResult.get();
-    
+
+    std::cerr << "  Parsed OK. Meshes: " << asset.meshes.size()
+              << ", Buffers: " << asset.buffers.size()
+              << ", Accessors: " << asset.accessors.size() << "\n" << std::flush;
+
+    // --- Extract vertex positions and indices for meshlet generation ---
+    // We do this BEFORE buffer merging while accessors still point to valid data.
+    std::vector<float> allPositions; // flat x,y,z
+    std::vector<uint32_t> allIndices;
+
+    // Helper lambda to get raw buffer pointer from a fastgltf buffer
+    auto getBufferBytes = [&](size_t bufferIndex) -> const std::byte* {
+        auto& buf = asset.buffers[bufferIndex];
+        if (auto* arr = std::get_if<fastgltf::sources::Array>(&buf.data)) {
+            return arr->bytes.data();
+        } else if (auto* vec = std::get_if<fastgltf::sources::Vector>(&buf.data)) {
+            return vec->bytes.data();
+        }
+        return nullptr;
+    };
+
+    std::cerr << "  Extracting geometry from " << asset.meshes.size() << " meshes\n" << std::flush;
+
+    for (const auto& mesh : asset.meshes) {
+        for (const auto& prim : mesh.primitives) {
+            uint32_t baseVertex = static_cast<uint32_t>(allPositions.size() / 3);
+
+            auto posIt = prim.findAttribute("POSITION");
+            if (posIt != prim.attributes.end()) {
+                auto& posAccessor = asset.accessors[posIt->accessorIndex];
+                size_t prevSize = allPositions.size();
+                allPositions.resize(prevSize + posAccessor.count * 3);
+                
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(asset, posAccessor, [&](fastgltf::math::fvec3 pos, std::size_t idx) {
+                    allPositions[prevSize + idx * 3 + 0] = pos.x();
+                    allPositions[prevSize + idx * 3 + 1] = pos.y();
+                    allPositions[prevSize + idx * 3 + 2] = pos.z();
+                });
+            }
+
+            if (prim.indicesAccessor.has_value()) {
+                auto& idxAccessor = asset.accessors[prim.indicesAccessor.value()];
+                size_t prevSize = allIndices.size();
+                allIndices.resize(prevSize + idxAccessor.count);
+                
+                fastgltf::iterateAccessorWithIndex<uint32_t>(asset, idxAccessor, [&](uint32_t idx, std::size_t i) {
+                    allIndices[prevSize + i] = idx + baseVertex;
+                });
+            } else if (posIt != prim.attributes.end()) {
+                // Generate unindexed mesh indices
+                auto& posAccessor = asset.accessors[posIt->accessorIndex];
+                size_t prevSize = allIndices.size();
+                allIndices.resize(prevSize + posAccessor.count);
+                for(size_t i=0; i<posAccessor.count; ++i) {
+                    allIndices[prevSize + i] = static_cast<uint32_t>(baseVertex + i);
+                }
+            }
+        }
+    }
+
+    std::cerr << "  Extracted " << (allPositions.size() / 3) << " vertices, " << allIndices.size() << " indices\n" << std::flush;
+
+    // --- Continue with texture embedding and GLB export ---
     bool hasBasisu = false;
     for (const auto& ext : asset.extensionsUsed) {
         if (ext == "KHR_texture_basisu") hasBasisu = true;
@@ -128,12 +343,24 @@ void compile_gltf_model(const std::string& inputPath, const std::string& outputP
     asset.buffers.clear();
     asset.buffers.push_back(std::move(mainBuffer));
 
-    fastgltf::FileExporter exporter;
-    auto error = exporter.writeGltfBinary(asset, outputPath);
-    if (error != fastgltf::Error::None) {
-        std::cerr << "Failed to export GLB: " << fastgltf::getErrorMessage(error) << "\n";
+    if (inputPath != outputPath) {
+        fastgltf::FileExporter exporter;
+        auto error = exporter.writeGltfBinary(asset, outputPath);
+        if (error != fastgltf::Error::None) {
+            std::cerr << "Failed to export GLB: " << fastgltf::getErrorMessage(error) << "\n";
+        } else {
+            std::cout << "Successfully exported GLB to " << outputPath << "\n";
+        }
     } else {
-        std::cout << "Successfully exported GLB to " << outputPath << "\n";
+        std::cout << "Skipping GLB export, appending meshlets to existing file " << outputPath << "\n";
+    }
+
+    // --- Generate meshlets and append to GLB ---
+    if (!allPositions.empty() && !allIndices.empty()) {
+        generate_meshlets(allPositions.data(), sizeof(float) * 3,
+                          allPositions.size() / 3,
+                          allIndices.data(), allIndices.size(),
+                          outputPath);
     }
 }
 
@@ -146,6 +373,7 @@ struct Vertex {
 };
 
 void compile_model(const std::string& inputPath, const std::string& outputPath) {
+    std::cerr << "[compile_model] " << inputPath << "\n" << std::flush;
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
@@ -320,16 +548,33 @@ void compile_model(const std::string& inputPath, const std::string& outputPath) 
     asset.defaultScene = 0;
 
     // Export
-    fastgltf::FileExporter exporter;
-    auto error = exporter.writeGltfBinary(asset, outputPath);
-    if (error != fastgltf::Error::None) {
-        std::cerr << "Failed to export GLB: " << fastgltf::getErrorMessage(error) << "\n";
+    if (inputPath != outputPath) {
+        fastgltf::FileExporter exporter;
+        auto error = exporter.writeGltfBinary(asset, outputPath);
+        if (error != fastgltf::Error::None) {
+            std::cerr << "Failed to export GLB: " << fastgltf::getErrorMessage(error) << "\n";
+        } else {
+            std::cout << "Successfully exported GLB to " << outputPath << "\n";
+        }
     } else {
-        std::cout << "Successfully exported " << outputPath << "\n";
+        std::cout << "Skipping GLB export, appending meshlets to existing file " << outputPath << "\n";
+    }
+
+    // Generate meshlets and append to GLB
+    if (!vertices.empty() && !indices.empty()) {
+        // Vertex struct has pos at offset 0, stride = sizeof(Vertex)
+        generate_meshlets(vertices[0].pos, sizeof(Vertex),
+                          vertices.size(),
+                          indices.data(), indices.size(),
+                          outputPath);
     }
 }
 
 int main() {
+    std::cerr << "[model_compiler] Starting...\n" << std::flush;
+    compile_gltf_model("assets/models/glb/triangle.glb", "assets/models/glb/triangle.glb");
+    compile_gltf_model("assets/models/glb/cube.glb", "assets/models/glb/cube.glb");
+    compile_gltf_model("assets/models/glb/boulder_01_1k.glb", "assets/models/glb/boulder_01_1k.glb");
     std::string inDir = "assets/models/obj";
     std::string outDir = "assets/models/glb";
 
@@ -358,7 +603,7 @@ int main() {
             }
 
             if (needsUpdate) {
-                std::cout << "Compiling model: " << entry.path().string() << "...\n";
+                std::cerr << "[main] Compiling: " << entry.path().string() << "\n" << std::flush;
                 if (ext == ".obj") {
                     compile_model(entry.path().string(), outFile);
                 } else if (ext == ".gltf") {

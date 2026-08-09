@@ -7,11 +7,14 @@
 
 namespace vke {
 
+PFN_vkCmdDrawMeshTasksEXT pfn_vkCmdDrawMeshTasksEXT = nullptr;
+
 // --- Internal constants ---
 static const std::vector<const char *> g_validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
 static const std::vector<const char *> g_deviceExtensions = {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    VK_EXT_MESH_SHADER_EXTENSION_NAME};
 
 // --- Internal helpers (file-scoped) ---
 
@@ -128,7 +131,7 @@ static void create_instance(DeviceState &state) {
   appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
   appInfo.pEngineName = "No Engine";
   appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-  appInfo.apiVersion = VK_API_VERSION_1_2;
+  appInfo.apiVersion = VK_API_VERSION_1_3;
 
   VkInstanceCreateInfo createInfo = {};
   createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -315,8 +318,19 @@ static void create_logical_device(DeviceState &state) {
   }
 #endif
 
+  VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures = {};
+  meshShaderFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+  meshShaderFeatures.meshShader = VK_TRUE;
+  meshShaderFeatures.taskShader = VK_TRUE;
+
+  VkPhysicalDeviceVulkan13Features vulkan13Features = {};
+  vulkan13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+  vulkan13Features.pNext = &meshShaderFeatures;
+  vulkan13Features.maintenance4 = VK_TRUE;
+
   VkPhysicalDeviceVulkan12Features vulkan12Features = {};
   vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  vulkan12Features.pNext = &vulkan13Features;
   vulkan12Features.descriptorBindingPartiallyBound = VK_TRUE;
   vulkan12Features.runtimeDescriptorArray = VK_TRUE;
   vulkan12Features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
@@ -348,6 +362,11 @@ static void create_logical_device(DeviceState &state) {
   vkGetDeviceQueue(state.device, indices.graphicsFamily, 0,
                    &state.graphicsQueue);
   vkGetDeviceQueue(state.device, indices.presentFamily, 0, &state.presentQueue);
+
+  pfn_vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)vkGetDeviceProcAddr(state.device, "vkCmdDrawMeshTasksEXT");
+  if (!pfn_vkCmdDrawMeshTasksEXT) {
+    std::cerr << "Warning: Could not load vkCmdDrawMeshTasksEXT\n";
+  }
 }
 
 static void create_command_pool(DeviceState &state) {

@@ -1,0 +1,33 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+// We will dispatch 1 thread group per meshlet, but in the future we'll use task shaders for culling.
+// For now, simple pass-through.
+struct TaskData {
+    uint meshletIndices[32];
+};
+taskPayloadSharedEXT TaskData OUT;
+
+void main() {
+    // For now, each thread group maps 1-to-1 to a meshlet.
+    // In a real implementation we would do frustum and backface culling here.
+    
+    // Each thread writes its own meshlet index to the payload.
+    // Since we dispatch (MeshletCount / 32) groups, gl_WorkGroupID.x * 32 + gl_LocalInvocationID.x gives the meshlet index.
+    
+    uint meshletIndex = gl_WorkGroupID.x * 32 + gl_LocalInvocationID.x;
+    
+    // We just emit 32 meshlets per task workgroup
+    OUT.meshletIndices[gl_LocalInvocationID.x] = meshletIndex;
+    
+    // Wait for all threads to write to the payload
+    barrier();
+    
+    // The first thread emits the mesh workgroups (one mesh shader workgroup per meshlet)
+    if (gl_LocalInvocationID.x == 0) {
+        // Emit 32 mesh workgroups for the 32 meshlets we just recorded in the payload
+        EmitMeshTasksEXT(32, 1, 1);
+    }
+}

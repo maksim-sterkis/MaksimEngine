@@ -176,7 +176,7 @@ void init(EngineState &state, const EngineConfig &config) {
   swapchain::create(state.swapchain, state.device,
                     window::get_extent(state.window));
   pipeline::create(state.pipeline, state.device.device,
-                   state.swapchain.renderPass, config.vertexShaderPath,
+                   state.swapchain.renderPass, config.taskShaderPath, config.meshShaderPath,
                    config.fragmentShaderPath);
   allocate_command_buffers(state);
 
@@ -203,7 +203,7 @@ void init(EngineState &state, const EngineConfig &config) {
   allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
   allocInfo.descriptorPool = state.descriptorPool;
   allocInfo.descriptorSetCount = 1;
-  allocInfo.pSetLayouts = &state.pipeline.descriptorSetLayout;
+  allocInfo.pSetLayouts = &state.pipeline.globalSetLayout;
 
   // We must define how many descriptors we are actually allocating for the unbounded array
   uint32_t maxBinding = 100000;

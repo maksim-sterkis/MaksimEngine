@@ -17,7 +17,8 @@ struct PushConstantData {
   int hasTexture;
   int debugColors;
   uint32_t materialIndex;
-  int padding[7];
+  uint32_t meshletCount;
+  int padding[6];
 };
 
 struct PipelineConfigInfo {
@@ -38,15 +39,17 @@ struct PipelineConfigInfo {
 struct PipelineState {
   VkPipeline pipeline = VK_NULL_HANDLE;
   VkPipelineLayout layout = VK_NULL_HANDLE;
-  VkShaderModule vertModule = VK_NULL_HANDLE;
+  VkShaderModule taskModule = VK_NULL_HANDLE;
+  VkShaderModule meshModule = VK_NULL_HANDLE;
   VkShaderModule fragModule = VK_NULL_HANDLE;
-  VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSetLayout modelSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE;
 };
 
 namespace pipeline {
 
 void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
-            const char *vertPath, const char *fragPath);
+            const char *taskPath, const char *meshPath, const char *fragPath);
 void destroy(PipelineState &state, VkDevice device);
 void bind(const PipelineState &state, VkCommandBuffer cmd);
 PipelineConfigInfo default_config_info();

@@ -21,7 +21,7 @@ using namespace vke;
 int triangle_color_idx = 0;
 bool triangle_follow_mouse = false;
 
-int current_view = 3; // 1 = Triangle, 2 = Cube, 3 = Boulder
+int current_view = 2; // 1 = Triangle, 2 = Cube, 3 = Boulder
 float camera_distance = 3.0f;
 
 vke::AssetPool asset_pool;
@@ -261,10 +261,10 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
 
   vke::PushConstantData push{};
 
-  // Bind Global Descriptor Set
+  // Bind Global Descriptor Set (Not used directly by graphics pipeline in visibility buffer approach, but we bind it anyway for later)
   if (state.globalDescriptorSet != VK_NULL_HANDLE) {
       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              state.pipeline.layout, 0, 1,
+                              state.pipeline.layout, 1, 1,
                               &state.globalDescriptorSet, 0, nullptr);
   }
 
@@ -286,14 +286,6 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
 
     if (current_view == 1) {
       glm::mat4 ortho = glm::mat4(1.0f);
-      if (state.aspectMode == AspectMode::ULTRAWIDE) {
-        float scaleX =
-            winAspect > targetAspect ? targetAspect / winAspect : 1.0f;
-        float scaleY =
-            winAspect > targetAspect ? 1.0f : winAspect / targetAspect;
-        ortho = glm::scale(glm::mat4(1.0f), glm::vec3(scaleX, scaleY, 1.0f));
-      }
-
       push.mvp = ortho * model_mat;
       push.useOverride = 1;
 
@@ -302,41 +294,46 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
       } else if (triangle_color_idx == 1) {
         push.colorOverride = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
       } else if (triangle_color_idx == 2) {
-        push.colorOverride = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+        push.useOverride = 0;
       } else {
         push.colorOverride = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
       }
     } else {
-      glm::mat4 proj;
-      if (state.aspectMode == AspectMode::FIXED) {
-        proj =
-            glm::perspective(glm::radians(45.0f), targetAspect, 0.01f, 100.0f);
-      } else {
-        proj = glm::perspective(glm::radians(45.0f), winAspect, 0.01f, 100.0f);
-      }
+      glm::mat4 proj = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
       proj[1][1] *= -1;
 
-      glm::mat4 view = vke::camera::get_view_matrix(camera_state);
+      glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
       push.mvp = proj * view * model_mat;
       push.useOverride = 0;
     }
 
     const vke::ModelData *modelData =
         vke::asset::get_model(asset_pool, mesh->model_handle);
-    if (modelData) {
-      vke::model::bind(cmd, *modelData);
-      for (const auto& subMesh : modelData->subMeshes) {
-          push.materialIndex = subMesh.materialIndex;
-          vkCmdPushConstants(cmd, state.pipeline.layout,
-                             VK_SHADER_STAGE_VERTEX_BIT |
-                                 VK_SHADER_STAGE_FRAGMENT_BIT,
-                             0, sizeof(vke::PushConstantData), &push);
-          
-          if (modelData->hasIndexBuffer) {
-              vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexOffset, 0, 0);
-          } else {
-              vkCmdDraw(cmd, subMesh.indexCount, 1, subMesh.indexOffset, 0);
-          }
+    if (modelData && modelData->meshletCount > 0) {
+      // Bind model SSBOs
+      if (modelData->descriptorSet != VK_NULL_HANDLE) {
+          vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  state.pipeline.layout, 0, 1,
+                                  &modelData->descriptorSet, 0, nullptr);
+      }
+
+      push.materialIndex = modelData->subMeshes.empty() ? 0 : modelData->subMeshes[0].materialIndex;
+      push.meshletCount = modelData->meshletCount;
+
+      static bool printed = false;
+      if (!printed && current_view == 2) { // 2 = cube
+          std::cout << "DEBUG: Cube materialIndex = " << push.materialIndex << std::endl;
+          printed = true;
+      }
+
+      vkCmdPushConstants(cmd, state.pipeline.layout,
+                         VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                         0, sizeof(vke::PushConstantData), &push);
+
+      // Dispatch mesh shaders (1 task group per 32 meshlets)
+      uint32_t taskGroupCount = (modelData->meshletCount + 31) / 32;
+      if (pfn_vkCmdDrawMeshTasksEXT) {
+          pfn_vkCmdDrawMeshTasksEXT(cmd, taskGroupCount, 1, 1);
       }
     }
   }
@@ -349,7 +346,8 @@ int main() {
   config.windowTitle = "VK_game_engine - 3D Cube";
   config.windowWidth = 800;
   config.windowHeight = 600;
-  config.vertexShaderPath = "shaders/shader.vert.spv";
+  config.taskShaderPath = "shaders/shader.task.spv";
+  config.meshShaderPath = "shaders/shader.mesh.spv";
   config.fragmentShaderPath = "shaders/shader.frag.spv";
   config.clearColor[0] = 0.01f;
   config.clearColor[1] = 0.01f;
@@ -358,6 +356,7 @@ int main() {
 
   try {
     engine::init(engineState, config);
+    input::init(engineState.input, engineState.window);
 
     // Init Default Texture (fixes Vulkan validation errors)
     vke::asset::init_default_texture(asset_pool, engineState.device,
@@ -366,13 +365,16 @@ int main() {
     // Init Camera
     vke::camera::init(camera_state, glm::vec3(0.0f, 0.0f, 3.0f));
 
+    // Wait until models are loaded
+
+
     // Load Assets
     uint32_t triangle_mesh = vke::asset::load_model(
-        asset_pool, engineState.device, engineState.globalDescriptorSet, "assets/models/glb/triangle.glb");
-    uint32_t cube_mesh = vke::asset::load_model(asset_pool, engineState.device,
-                                                engineState.globalDescriptorSet, "assets/models/glb/cube.glb");
-    uint32_t boulder_mesh = vke::asset::load_model(asset_pool, engineState.device,
-                                                   engineState.globalDescriptorSet, "assets/models/glb/boulder_01_1k.glb");
+        asset_pool, engineState.device, engineState.globalDescriptorSet, engineState.descriptorPool, engineState.pipeline.modelSetLayout, "assets/models/glb/triangle.glb");
+    uint32_t cube_mesh = vke::asset::load_model(
+        asset_pool, engineState.device, engineState.globalDescriptorSet, engineState.descriptorPool, engineState.pipeline.modelSetLayout, "assets/models/glb/cube.glb");
+    uint32_t boulder_mesh = vke::asset::load_model(
+        asset_pool, engineState.device, engineState.globalDescriptorSet, engineState.descriptorPool, engineState.pipeline.modelSetLayout, "assets/models/glb/boulder_01_1k.glb");
     uint32_t test_texture = vke::asset::load_texture(
         asset_pool, engineState.device, engineState.globalDescriptorSet,
         "assets/textures/ktx2/test.ktx2");

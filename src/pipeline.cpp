@@ -103,57 +103,72 @@ PipelineConfigInfo default_config_info() {
 }
 
 void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
-            const char *vertPath, const char *fragPath) {
+            const char *taskPath, const char *meshPath, const char *fragPath) {
   // Create pipeline layout
   VkPushConstantRange pushConstantRange{};
   pushConstantRange.stageFlags =
-      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+      VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
   pushConstantRange.offset = 0;
   pushConstantRange.size = sizeof(PushConstantData);
 
-  // Create descriptor set layout
-  VkDescriptorSetLayoutBinding materialSSBOLayoutBinding{};
-  materialSSBOLayoutBinding.binding = 0;
-  materialSSBOLayoutBinding.descriptorCount = 1;
-  materialSSBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  materialSSBOLayoutBinding.pImmutableSamplers = nullptr;
-  materialSSBOLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-  VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-  samplerLayoutBinding.binding = 1;
-  samplerLayoutBinding.descriptorCount = 100000;
-  samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  samplerLayoutBinding.pImmutableSamplers = nullptr;
-  samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-  VkDescriptorSetLayoutBinding bindings[] = {materialSSBOLayoutBinding, samplerLayoutBinding};
-
-  VkDescriptorBindingFlags bindingFlags[2] = {
-      0, // No special flags for the SSBO
-      VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
-  };
-
-  VkDescriptorSetLayoutBindingFlagsCreateInfo layoutFlags{};
-  layoutFlags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-  layoutFlags.bindingCount = 2;
-  layoutFlags.pBindingFlags = bindingFlags;
+  // Descriptor Set 0: Model SSBOs (Meshlets, Vertices, Triangles, Bounds, GlobalVertexBuffer)
+  std::vector<VkDescriptorSetLayoutBinding> bindings(5);
+  for (int i = 0; i < 5; ++i) {
+      bindings[i].binding = i;
+      bindings[i].descriptorCount = 1;
+      bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      bindings[i].pImmutableSamplers = nullptr;
+      bindings[i].stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  }
 
   VkDescriptorSetLayoutCreateInfo layoutInfoDSL{};
   layoutInfoDSL.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfoDSL.pNext = &layoutFlags;
-  layoutInfoDSL.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-  layoutInfoDSL.bindingCount = 2;
-  layoutInfoDSL.pBindings = bindings;
+  layoutInfoDSL.bindingCount = static_cast<uint32_t>(bindings.size());
+  layoutInfoDSL.pBindings = bindings.data();
 
   if (vkCreateDescriptorSetLayout(device, &layoutInfoDSL, nullptr,
-                                  &state.descriptorSetLayout) != VK_SUCCESS) {
-    throw std::runtime_error("failed to create descriptor set layout!");
+                                  &state.modelSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create model descriptor set layout!");
   }
+
+  // Descriptor Set 1: Global (Materials, Textures)
+  std::vector<VkDescriptorSetLayoutBinding> globalBindings(2);
+  globalBindings[0].binding = 0;
+  globalBindings[0].descriptorCount = 1;
+  globalBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  globalBindings[0].pImmutableSamplers = nullptr;
+  globalBindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+  globalBindings[1].binding = 1;
+  globalBindings[1].descriptorCount = 100000;
+  globalBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  globalBindings[1].pImmutableSamplers = nullptr;
+  globalBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+  VkDescriptorSetLayoutBindingFlagsCreateInfo layoutBindingFlags{};
+  layoutBindingFlags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+  layoutBindingFlags.bindingCount = 2;
+  VkDescriptorBindingFlags flags[2] = {0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT};
+  layoutBindingFlags.pBindingFlags = flags;
+
+  VkDescriptorSetLayoutCreateInfo globalLayoutInfo{};
+  globalLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  globalLayoutInfo.pNext = &layoutBindingFlags;
+  globalLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+  globalLayoutInfo.bindingCount = static_cast<uint32_t>(globalBindings.size());
+  globalLayoutInfo.pBindings = globalBindings.data();
+
+  if (vkCreateDescriptorSetLayout(device, &globalLayoutInfo, nullptr,
+                                  &state.globalSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create global descriptor set layout!");
+  }
+
+  VkDescriptorSetLayout layouts[] = {state.modelSetLayout, state.globalSetLayout};
 
   VkPipelineLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  layoutInfo.setLayoutCount = 1;
-  layoutInfo.pSetLayouts = &state.descriptorSetLayout;
+  layoutInfo.setLayoutCount = 2;
+  layoutInfo.pSetLayouts = layouts;
   layoutInfo.pushConstantRangeCount = 1;
   layoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -163,41 +178,47 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
   }
 
   // Load shaders
-  auto vertCode = read_file(vertPath);
+  auto taskCode = read_file(taskPath);
+  auto meshCode = read_file(meshPath);
   auto fragCode = read_file(fragPath);
-  state.vertModule = create_shader_module(device, vertCode);
+  state.taskModule = create_shader_module(device, taskCode);
+  state.meshModule = create_shader_module(device, meshCode);
   state.fragModule = create_shader_module(device, fragCode);
 
   // Shader stages
-  VkPipelineShaderStageCreateInfo shaderStages[2];
+  VkPipelineShaderStageCreateInfo shaderStages[3];
   shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-  shaderStages[0].module = state.vertModule;
+  shaderStages[0].stage = VK_SHADER_STAGE_TASK_BIT_EXT;
+  shaderStages[0].module = state.taskModule;
   shaderStages[0].pName = "main";
   shaderStages[0].flags = 0;
   shaderStages[0].pNext = nullptr;
   shaderStages[0].pSpecializationInfo = nullptr;
 
   shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-  shaderStages[1].module = state.fragModule;
+  shaderStages[1].stage = VK_SHADER_STAGE_MESH_BIT_EXT;
+  shaderStages[1].module = state.meshModule;
   shaderStages[1].pName = "main";
   shaderStages[1].flags = 0;
   shaderStages[1].pNext = nullptr;
   shaderStages[1].pSpecializationInfo = nullptr;
 
-  auto bindingDescription = Vertex::getBindingDescription();
-  auto attributeDescriptions = Vertex::getAttributeDescriptions();
+  shaderStages[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  shaderStages[2].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+  shaderStages[2].module = state.fragModule;
+  shaderStages[2].pName = "main";
+  shaderStages[2].flags = 0;
+  shaderStages[2].pNext = nullptr;
+  shaderStages[2].pSpecializationInfo = nullptr;
 
-  // Vertex input
+  // Vertex input (Disabled for Mesh Shaders)
   VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
   vertexInputInfo.sType =
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-  vertexInputInfo.vertexAttributeDescriptionCount =
-      static_cast<uint32_t>(attributeDescriptions.size());
-  vertexInputInfo.vertexBindingDescriptionCount = 1;
-  vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
-  vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+  vertexInputInfo.vertexAttributeDescriptionCount = 0;
+  vertexInputInfo.vertexBindingDescriptionCount = 0;
+  vertexInputInfo.pVertexAttributeDescriptions = nullptr;
+  vertexInputInfo.pVertexBindingDescriptions = nullptr;
 
   // Use default config
   PipelineConfigInfo config = default_config_info();
@@ -207,7 +228,7 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
   // Create the graphics pipeline
   VkGraphicsPipelineCreateInfo pipelineInfo{};
   pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-  pipelineInfo.stageCount = 2;
+  pipelineInfo.stageCount = 3;
   pipelineInfo.pStages = shaderStages;
   pipelineInfo.pVertexInputState = &vertexInputInfo;
   pipelineInfo.pInputAssemblyState = &config.inputAssemblyInfo;
@@ -230,11 +251,13 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
 }
 
 void destroy(PipelineState &state, VkDevice device) {
-  vkDestroyShaderModule(device, state.vertModule, nullptr);
+  vkDestroyShaderModule(device, state.taskModule, nullptr);
+  vkDestroyShaderModule(device, state.meshModule, nullptr);
   vkDestroyShaderModule(device, state.fragModule, nullptr);
   vkDestroyPipeline(device, state.pipeline, nullptr);
   vkDestroyPipelineLayout(device, state.layout, nullptr);
-  vkDestroyDescriptorSetLayout(device, state.descriptorSetLayout, nullptr);
+  vkDestroyDescriptorSetLayout(device, state.modelSetLayout, nullptr);
+  vkDestroyDescriptorSetLayout(device, state.globalSetLayout, nullptr);
 }
 
 void bind(const PipelineState &state, VkCommandBuffer cmd) {

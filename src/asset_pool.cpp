@@ -38,6 +38,8 @@ void init_default_texture(AssetPool &pool, DeviceState &deviceState,
 
 uint32_t load_model(AssetPool &pool, DeviceState &deviceState,
                     VkDescriptorSet globalDescriptorSet,
+                    VkDescriptorPool descriptorPool,
+                    VkDescriptorSetLayout descriptorSetLayout,
                     const std::string &filepath) {
   if (pool.model_registry.find(filepath) != pool.model_registry.end()) {
     return pool.model_registry[filepath];
@@ -45,6 +47,60 @@ uint32_t load_model(AssetPool &pool, DeviceState &deviceState,
 
   ModelData model;
   if (model::load_glb(deviceState, filepath, model)) {
+    
+    // Allocate and update the descriptor set for this model's SSBOs
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &descriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(deviceState.device, &allocInfo, &model.descriptorSet) != VK_SUCCESS) {
+      throw std::runtime_error("failed to allocate model descriptor set!");
+    }
+
+    VkDescriptorBufferInfo meshletInfo{};
+    meshletInfo.buffer = model.meshletBuffer;
+    meshletInfo.offset = 0;
+    meshletInfo.range = VK_WHOLE_SIZE;
+
+    VkDescriptorBufferInfo verticesInfo{};
+    verticesInfo.buffer = model.meshletVerticesBuffer;
+    verticesInfo.offset = 0;
+    verticesInfo.range = VK_WHOLE_SIZE;
+
+    VkDescriptorBufferInfo trianglesInfo{};
+    trianglesInfo.buffer = model.meshletTrianglesBuffer;
+    trianglesInfo.offset = 0;
+    trianglesInfo.range = VK_WHOLE_SIZE;
+
+    VkDescriptorBufferInfo boundsInfo{};
+    boundsInfo.buffer = model.meshletBoundsBuffer;
+    boundsInfo.offset = 0;
+    boundsInfo.range = VK_WHOLE_SIZE;
+
+    VkDescriptorBufferInfo vertexInfo{};
+    vertexInfo.buffer = model.vertexBuffer;
+    vertexInfo.offset = 0;
+    vertexInfo.range = VK_WHOLE_SIZE;
+
+    std::vector<VkWriteDescriptorSet> descriptorWrites(5);
+    for (int i = 0; i < 5; ++i) {
+      descriptorWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[i].dstSet = model.descriptorSet;
+      descriptorWrites[i].dstBinding = i;
+      descriptorWrites[i].dstArrayElement = 0;
+      descriptorWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      descriptorWrites[i].descriptorCount = 1;
+    }
+    descriptorWrites[0].pBufferInfo = &meshletInfo;
+    descriptorWrites[1].pBufferInfo = &verticesInfo;
+    descriptorWrites[2].pBufferInfo = &trianglesInfo;
+    descriptorWrites[3].pBufferInfo = &boundsInfo;
+    descriptorWrites[4].pBufferInfo = &vertexInfo;
+
+    vkUpdateDescriptorSets(deviceState.device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+
     std::vector<uint32_t> imageToHandle(model.rawImages.size(), 0);
     uint32_t imgIndex = 0;
     for (const auto& imgBytes : model.rawImages) {

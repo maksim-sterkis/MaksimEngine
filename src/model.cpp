@@ -52,33 +52,35 @@ void create(DeviceState &deviceState, const std::vector<Vertex> &vertices,
             const std::vector<uint32_t> &indices, ModelData &outModel) {
   // 1. Vertex Buffer
   outModel.vertexCount = static_cast<uint32_t>(vertices.size());
-  VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * outModel.vertexCount;
+  if (!vertices.empty()) {
+    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    device::create_buffer(deviceState, bufferSize,
+                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          stagingBuffer, stagingBufferMemory);
 
-  VkBuffer stagingBuffer;
-  VkDeviceMemory stagingBufferMemory;
-  device::create_buffer(deviceState, vertexBufferSize,
-                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        stagingBuffer, stagingBufferMemory);
+    void *data;
+    vkMapMemory(deviceState.device, stagingBufferMemory, 0, bufferSize, 0,
+                &data);
+    memcpy(data, vertices.data(), (size_t)bufferSize);
+    vkUnmapMemory(deviceState.device, stagingBufferMemory);
 
-  void *data;
-  vkMapMemory(deviceState.device, stagingBufferMemory, 0, vertexBufferSize, 0,
-              &data);
-  memcpy(data, vertices.data(), (size_t)vertexBufferSize);
-  vkUnmapMemory(deviceState.device, stagingBufferMemory);
+    device::create_buffer(deviceState, bufferSize,
+                          VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          outModel.vertexBuffer, outModel.vertexBufferMemory);
 
-  device::create_buffer(deviceState, vertexBufferSize,
-                        VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                        outModel.vertexBuffer, outModel.vertexBufferMemory);
+    device::copy_buffer(deviceState, stagingBuffer, outModel.vertexBuffer,
+                        bufferSize);
 
-  device::copy_buffer(deviceState, stagingBuffer, outModel.vertexBuffer,
-                      vertexBufferSize);
-
-  vkDestroyBuffer(deviceState.device, stagingBuffer, nullptr);
-  vkFreeMemory(deviceState.device, stagingBufferMemory, nullptr);
+    vkDestroyBuffer(deviceState.device, stagingBuffer, nullptr);
+    vkFreeMemory(deviceState.device, stagingBufferMemory, nullptr);
+  }
 
   // 2. Index Buffer
   outModel.indexCount = static_cast<uint32_t>(indices.size());
@@ -139,6 +141,16 @@ void destroy(DeviceState &deviceState, ModelData &model) {
   }
   model.indexCount = 0;
   model.hasIndexBuffer = false;
+
+  auto destroyBuf = [&](VkBuffer& b, VkDeviceMemory& m) {
+    if (b != VK_NULL_HANDLE) { vkDestroyBuffer(deviceState.device, b, nullptr); b = VK_NULL_HANDLE; }
+    if (m != VK_NULL_HANDLE) { vkFreeMemory(deviceState.device, m, nullptr); m = VK_NULL_HANDLE; }
+  };
+  destroyBuf(model.meshletBuffer, model.meshletBufferMemory);
+  destroyBuf(model.meshletVerticesBuffer, model.meshletVerticesBufferMemory);
+  destroyBuf(model.meshletTrianglesBuffer, model.meshletTrianglesBufferMemory);
+  destroyBuf(model.meshletBoundsBuffer, model.meshletBoundsBufferMemory);
+  model.meshletCount = 0;
 }
 
 void bind(VkCommandBuffer commandBuffer, const ModelData &model) {
@@ -310,6 +322,78 @@ bool load_glb(DeviceState &deviceState, const std::string &filepath, ModelData &
     }
     
     outModel.rawImages.push_back(std::move(imgBytes));
+  }
+
+  // --- Meshlet Payload Loading ---
+  std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+  if (file.is_open()) {
+    std::streamsize fileSize = file.tellg();
+    if (fileSize > 12) {
+      file.seekg(-12, std::ios::end);
+      uint64_t payloadSize = 0;
+      char magic[5] = {0};
+      file.read(reinterpret_cast<char*>(&payloadSize), 8);
+      file.read(magic, 4);
+
+      if (std::string(magic) == "MESH") {
+        file.seekg(-(12 + static_cast<std::streamoff>(payloadSize)), std::ios::end);
+        std::vector<char> payload(payloadSize);
+        file.read(payload.data(), payloadSize);
+
+        MeshletFileHeader header;
+        std::memcpy(&header, payload.data(), sizeof(MeshletFileHeader));
+
+        if (header.magic == 0x4853454D) {
+          outModel.meshletCount = header.meshletCount;
+          
+          size_t meshletSize = header.meshletCount * 16; // meshopt_Meshlet is 16 bytes
+          size_t verticesSize = header.meshletVertexCount * 4; // uint32
+          size_t trianglesSize = header.meshletTriangleCount * 1; // uint8
+          size_t boundsSize = header.meshletCount * sizeof(MeshletBoundsGPU);
+          
+          size_t offset = sizeof(MeshletFileHeader);
+          
+          // Helper to create and copy buffer
+          auto uploadToBuffer = [&](VkBuffer& buf, VkDeviceMemory& mem, size_t sz, const void* pData) {
+            if (sz == 0) return;
+            VkBuffer stagingBuffer;
+            VkDeviceMemory stagingBufferMemory;
+            device::create_buffer(deviceState, sz, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+            void* mapped;
+            vkMapMemory(deviceState.device, stagingBufferMemory, 0, sz, 0, &mapped);
+            std::memcpy(mapped, pData, sz);
+            vkUnmapMemory(deviceState.device, stagingBufferMemory);
+            
+            device::create_buffer(deviceState, sz, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buf, mem);
+            device::copy_buffer(deviceState, stagingBuffer, buf, sz);
+            
+            vkDestroyBuffer(deviceState.device, stagingBuffer, nullptr);
+            vkFreeMemory(deviceState.device, stagingBufferMemory, nullptr);
+          };
+
+          uploadToBuffer(outModel.meshletBuffer, outModel.meshletBufferMemory, meshletSize, payload.data() + offset);
+          offset += meshletSize;
+          uploadToBuffer(outModel.meshletVerticesBuffer, outModel.meshletVerticesBufferMemory, verticesSize, payload.data() + offset);
+          offset += verticesSize;
+          uploadToBuffer(outModel.meshletTrianglesBuffer, outModel.meshletTrianglesBufferMemory, trianglesSize, payload.data() + offset);
+          offset += trianglesSize;
+          uploadToBuffer(outModel.meshletBoundsBuffer, outModel.meshletBoundsBufferMemory, boundsSize, payload.data() + offset);
+          
+          std::cout << "Successfully loaded " << header.meshletCount << " meshlets for " << filepath << "\n";
+        }
+      }
+    }
+  }
+
+  // Handle missing meshlets (e.g. if the tool failed to compile them)
+  if (outModel.meshletCount == 0) {
+      std::cerr << "Warning: No meshlets found in " << filepath << ". Creating empty buffers.\n";
+      // Create empty 4-byte buffers to keep Vulkan validation happy
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+      device::create_buffer(deviceState, 4, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outModel.meshletBuffer, outModel.meshletBufferMemory);
+      device::create_buffer(deviceState, 4, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outModel.meshletVerticesBuffer, outModel.meshletVerticesBufferMemory);
+      device::create_buffer(deviceState, 4, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outModel.meshletTrianglesBuffer, outModel.meshletTrianglesBufferMemory);
+      device::create_buffer(deviceState, 4, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outModel.meshletBoundsBuffer, outModel.meshletBoundsBufferMemory);
   }
 
   return true;

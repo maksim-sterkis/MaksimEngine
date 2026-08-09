@@ -6,7 +6,7 @@ A modern Vulkan game engine written in C++20, designed with next-generation rend
 
 - **Bindless Architecture**: Utilizes Vulkan 1.2 Descriptor Indexing (`VK_EXT_descriptor_indexing`) to drastically reduce CPU overhead during draw calls. An unbounded array of 100,000 descriptors allows for virtually limitless textures and materials mapped directly via PushConstants.
 - **Offline Asset Compiler**: Custom asset pipeline utilizing `fastgltf` and `tinyobjloader` to process `.obj` and `.gltf` source files into optimized, single-binary `.glb` payloads.
-- **Embedded Textures**: The compiler natively reads raw PBR texture files (JPEGs/PNGs) and packages them dynamically into the `.glb` buffers, resulting in clean, self-contained mesh payloads.
+- **Embedded Textures & Meshlets**: The compiler natively reads raw PBR texture files (JPEGs/PNGs) and packages them dynamically into the `.glb` buffers, and uses `meshoptimizer` to append partitioned Meshlets (vertex/triangle arrays) for high-performance geometry culling.
 - **Dynamic Asset Pool**: Robust texture and model pooling system preventing duplicate GPU uploads and seamlessly switching between raw JPEG/PNG loading (using `stb_image`) and compressed formats.
 - **PBR Materials**: Complete physical based rendering foundation with Cook-Torrance BRDF (Albedo, Normal, Metallic, Roughness) via SSBOs.
 
@@ -50,6 +50,7 @@ To run the engine itself:
 - [Vulkan](https://www.vulkan.org/)
 - [fastgltf](https://github.com/spnda/fastgltf)
 - [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader)
+- [meshoptimizer](https://github.com/zeux/meshoptimizer)
 - [stb_image](https://github.com/nothings/stb)
 - [GLFW](https://www.glfw.org/)
 - [GLM](https://github.com/g-truc/glm)

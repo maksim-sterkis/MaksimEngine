@@ -16,7 +16,8 @@ struct EngineConfig {
   const char *windowTitle = "Vulkan Engine";
   int windowWidth = 800;
   int windowHeight = 600;
-  const char *vertexShaderPath = "shaders/shader.vert.spv";
+  const char *taskShaderPath = "shaders/shader.task.spv";
+  const char *meshShaderPath = "shaders/shader.mesh.spv";
   const char *fragmentShaderPath = "shaders/shader.frag.spv";
   float clearColor[4] = {0.01f, 0.01f, 0.01f, 1.0f};
 };

@@ -33,6 +33,8 @@ void init_default_texture(AssetPool &pool, DeviceState &deviceState,
 
 uint32_t load_model(AssetPool &pool, DeviceState &deviceState,
                     VkDescriptorSet globalDescriptorSet,
+                    VkDescriptorPool descriptorPool,
+                    VkDescriptorSetLayout descriptorSetLayout,
                     const std::string &filepath);
 
 // Get the ModelData by handle

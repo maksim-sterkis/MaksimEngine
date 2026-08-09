@@ -1,0 +1,94 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 64, max_primitives = 124) out;
+
+// Inputs from Task Shader
+struct TaskData {
+    uint meshletIndices[32];
+};
+taskPayloadSharedEXT TaskData IN;
+
+struct Vertex {
+    float px, py, pz;
+    float cx, cy, cz;
+    float nx, ny, nz;
+    float tx, ty;
+};
+
+struct Meshlet {
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+};
+
+layout(set = 0, binding = 0) uniform GlobalUbo {
+    mat4 view;
+    mat4 proj;
+    mat4 viewProj;
+    vec3 cameraPos;
+} ubo;
+
+layout(set = 1, binding = 0) readonly buffer Meshlets {
+    Meshlet meshlets[];
+};
+
+layout(set = 1, binding = 1) readonly buffer MeshletVertices {
+    uint meshletVertices[];
+};
+
+layout(set = 1, binding = 2) readonly buffer MeshletTriangles {
+    uint8_t meshletTriangles[];
+};
+
+layout(set = 1, binding = 3) readonly buffer VertexBuffer {
+    Vertex vertices[];
+};
+
+// Push constants for model matrix
+layout(push_constant) uniform Push {
+    mat4 modelMatrix;
+    mat4 normalMatrix;
+} push;
+
+// Outputs to Fragment Shader
+layout(location = 0) out vec3 outColor[];
+layout(location = 1) out vec3 outNormal[];
+layout(location = 2) out vec2 outUV[];
+
+void main() {
+    uint meshletIndex = IN.meshletIndices[gl_WorkGroupID.x];
+    Meshlet m = meshlets[meshletIndex];
+
+    SetMeshOutputsEXT(m.vertexCount, m.triangleCount);
+
+    // Process vertices
+    for (uint i = gl_LocalInvocationID.x; i < m.vertexCount; i += 32) {
+        uint vertexIndex = meshletVertices[m.vertexOffset + i];
+        Vertex v = vertices[vertexIndex];
+
+        vec4 worldPos = push.modelMatrix * vec4(v.px, v.py, v.pz, 1.0);
+        gl_MeshVerticesEXT[i].gl_Position = ubo.viewProj * worldPos;
+
+        outColor[i] = vec3(v.cx, v.cy, v.cz);
+        
+        vec3 normal = vec3(v.nx, v.ny, v.nz);
+        outNormal[i] = normalize(mat3(push.normalMatrix) * normal);
+        
+        outUV[i] = vec2(v.tx, v.ty);
+    }
+
+    // Process triangles
+    for (uint i = gl_LocalInvocationID.x; i < m.triangleCount; i += 32) {
+        uint triOffset = m.triangleOffset + i * 3;
+        gl_PrimitiveTriangleIndicesEXT[i] = uvec3(
+            meshletTriangles[triOffset + 0],
+            meshletTriangles[triOffset + 1],
+            meshletTriangles[triOffset + 2]
+        );
+    }
+}

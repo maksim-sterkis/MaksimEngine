@@ -7,6 +7,9 @@
 
 namespace vke {
 
+// Extension function pointers
+extern PFN_vkCmdDrawMeshTasksEXT pfn_vkCmdDrawMeshTasksEXT;
+
 struct SwapChainSupportDetails {
   VkSurfaceCapabilitiesKHR capabilities;
   std::vector<VkSurfaceFormatKHR> formats;

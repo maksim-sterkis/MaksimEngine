@@ -27,11 +27,13 @@ This document explains **every single file** in the `VK_game_engine` project and
 - **`src/texture.hpp` / `.cpp`**: Responsible for decoding images into VRAM. It can decode standard formats (PNG/JPG) from memory using `stb_image` and transition them correctly to `VK_FORMAT_R8G8B8A8_UNORM` layouts. It also creates the `VkSampler` objects.
 
 ## `shaders/` (GPU Programs)
-- **`shaders/shader.vert`**: The Vertex Shader. Multiplies the incoming vertex positions by the `mvp` matrix from PushConstants. Passes `fragUV` and `fragNormal` to the fragment shader.
+- **`shaders/shader.vert`**: The Vertex Shader. Multiplies the incoming vertex positions by the `mvp` matrix from PushConstants. Passes `fragUV` and `fragNormal` to the fragment shader. (Pending replacement by Mesh Shaders).
 - **`shaders/shader.frag`**: The Fragment Shader. Uses `push.materialIndex` to read the exact PBR coefficients from the `MaterialSSBO`. It samples the textures directly from the unbounded bindless array and applies the Cook-Torrance BRDF lighting math (Albedo, Normal mapping, Metallic/Roughness reflections).
+- **`shaders/shader.task`**: The Vulkan Task Shader. Dispatches meshlets to the Mesh Shader.
+- **`shaders/shader.mesh`**: The Vulkan Mesh Shader. Replaces the legacy Vertex Shader, reads vertex/triangle data from SSBOs, and outputs primitives to the Fragment Shader.
 
 ## `tools/` (Offline Asset Pipeline)
-- **`tools/model_compiler.cpp`**: A standalone offline executable. It reads raw `.gltf` or `.obj` files, compresses their raw PNG/JPG textures into highly optimized formats (like KTX2 using `toktx`), and re-packages everything into a single, dense `.glb` binary payload.
+- **`tools/model_compiler.cpp`**: A standalone offline executable. It reads raw `.gltf` or `.obj` files, compresses their raw PNG/JPG textures into highly optimized formats (like KTX2 using `toktx`), packages them into a single, dense `.glb` binary payload, and calculates/appends **Meshlets** to the end of the file using `meshoptimizer`.
 - **`tools/texture_compiler.cpp`**: A legacy/helper script used exclusively to run batch conversions of raw texture directories into `KTX2` format.
 
 ---

@@ -52,14 +52,31 @@ template <> struct hash<vke::Vertex> {
 namespace vke {
 
 struct Material {
-  int albedoTexIndex = -1;
-  int normalTexIndex = -1;
-  int metallicRoughnessTexIndex = -1;
-  int padding = 0;
   glm::vec4 baseColorFactor = glm::vec4(1.0f);
   float metallicFactor = 1.0f;
   float roughnessFactor = 1.0f;
-  glm::vec2 padding2 = glm::vec2(0.0f);
+  int albedoTexIndex = -1;
+  int normalTexIndex = -1;
+  int metallicRoughnessTexIndex = -1;
+  int padding[3] = {0, 0, 0};
+};
+
+struct MeshletBoundsGPU {
+    float center[3];
+    float radius;
+    float cone_axis[3];
+    float cone_cutoff;
+};
+
+struct MeshletFileHeader {
+    uint32_t magic;         // 'MESH' = 0x4853454D
+    uint32_t version;       // 1
+    uint32_t meshletCount;
+    uint32_t meshletVertexCount;
+    uint32_t meshletTriangleCount;
+    uint32_t vertexCount;   // total vertices in the original mesh
+    uint32_t indexCount;    // total indices in the original mesh
+    uint32_t padding;
 };
 
 struct SubMesh {
@@ -77,6 +94,21 @@ struct ModelData {
   VkBuffer indexBuffer = VK_NULL_HANDLE;
   VkDeviceMemory indexBufferMemory = VK_NULL_HANDLE;
   bool hasIndexBuffer = false;
+
+  uint32_t meshletCount = 0;
+  VkBuffer meshletBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory meshletBufferMemory = VK_NULL_HANDLE;
+  
+  VkBuffer meshletVerticesBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory meshletVerticesBufferMemory = VK_NULL_HANDLE;
+  
+  VkBuffer meshletTrianglesBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory meshletTrianglesBufferMemory = VK_NULL_HANDLE;
+  
+  VkBuffer meshletBoundsBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory meshletBoundsBufferMemory = VK_NULL_HANDLE;
+
+  VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
   std::vector<std::vector<uint8_t>> rawImages;
   
