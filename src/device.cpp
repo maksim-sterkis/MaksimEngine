@@ -336,6 +336,7 @@ static void create_logical_device(DeviceState &state) {
   vulkan12Features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
   vulkan12Features.descriptorBindingVariableDescriptorCount = VK_TRUE;
   vulkan12Features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+  vulkan12Features.storageBuffer8BitAccess = VK_TRUE;
 
   VkPhysicalDeviceFeatures2 physicalDeviceFeatures2 = {};
   physicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;

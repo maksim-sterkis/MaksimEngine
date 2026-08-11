@@ -39,6 +39,9 @@ void init(ImguiState &state, const EngineState &engine) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGui::StyleColorsDark();
+  
+  ImGuiIO& io = ImGui::GetIO();
+  io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 
   ImGui_ImplGlfw_InitForVulkan(engine.window.handle, true);
 

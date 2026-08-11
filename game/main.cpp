@@ -173,8 +173,13 @@ void update_game(EngineState &state, float dt) {
   prev_key_3 = curr_key_3;
   prev_key_p = curr_key_p;
 
+  static bool prev_f3 = false;
+  static bool prev_esc = false;
+  bool curr_f3 = input::is_key_pressed(state.input, GLFW_KEY_F3);
+  bool curr_esc = input::is_key_pressed(state.input, GLFW_KEY_ESCAPE);
+
   static bool show_ui = false;
-  if (ImGui::IsKeyPressed(ImGuiKey_F3, false)) {
+  if (curr_f3 && !prev_f3) {
     show_ui = !show_ui;
   }
 
@@ -223,13 +228,16 @@ void update_game(EngineState &state, float dt) {
   }
 
   static bool show_exit_prompt = false;
-  if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+  if (curr_esc && !prev_esc) {
     show_exit_prompt = !show_exit_prompt;
     if (show_exit_prompt) {
       pointer_locked = false;
       glfwSetInputMode(state.window.handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
   }
+
+  prev_f3 = curr_f3;
+  prev_esc = curr_esc;
 
   if (show_exit_prompt) {
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
@@ -299,10 +307,10 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
         push.colorOverride = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
       }
     } else {
-      glm::mat4 proj = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
+      glm::mat4 proj = glm::perspective(glm::radians(45.0f), winAspect, 0.1f, 100.0f);
       proj[1][1] *= -1;
 
-      glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+      glm::mat4 view = vke::camera::get_view_matrix(camera_state);
       push.mvp = proj * view * model_mat;
       push.useOverride = 0;
     }
@@ -356,7 +364,6 @@ int main() {
 
   try {
     engine::init(engineState, config);
-    input::init(engineState.input, engineState.window);
 
     // Init Default Texture (fixes Vulkan validation errors)
     vke::asset::init_default_texture(asset_pool, engineState.device,

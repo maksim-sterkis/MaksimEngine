@@ -26,39 +26,42 @@ struct Meshlet {
     uint triangleCount;
 };
 
-layout(set = 0, binding = 0) uniform GlobalUbo {
-    mat4 view;
-    mat4 proj;
-    mat4 viewProj;
-    vec3 cameraPos;
-} ubo;
-
-layout(set = 1, binding = 0) readonly buffer Meshlets {
+layout(set = 0, binding = 0) readonly buffer Meshlets {
     Meshlet meshlets[];
 };
 
-layout(set = 1, binding = 1) readonly buffer MeshletVertices {
+layout(set = 0, binding = 1) readonly buffer MeshletVertices {
     uint meshletVertices[];
 };
 
-layout(set = 1, binding = 2) readonly buffer MeshletTriangles {
+layout(set = 0, binding = 2) readonly buffer MeshletTriangles {
     uint8_t meshletTriangles[];
 };
 
-layout(set = 1, binding = 3) readonly buffer VertexBuffer {
+layout(set = 0, binding = 3) readonly buffer MeshletBounds {
+    vec4 bounds[];
+};
+
+layout(set = 0, binding = 4) readonly buffer VertexBuffer {
     Vertex vertices[];
 };
 
-// Push constants for model matrix
-layout(push_constant) uniform Push {
-    mat4 modelMatrix;
-    mat4 normalMatrix;
+// Push constants for model matrix and material
+layout(push_constant) uniform PushConstants {
+    mat4 mvp;
+    vec4 colorOverride;
+    int useOverride;
+    int useTriplanar;
+    int hasTexture;
+    int debugColors;
+    uint materialIndex;
+    uint meshletCount;
 } push;
 
 // Outputs to Fragment Shader
 layout(location = 0) out vec3 outColor[];
-layout(location = 1) out vec3 outNormal[];
-layout(location = 2) out vec2 outUV[];
+layout(location = 1) out vec2 outTexCoord[];
+layout(location = 2) out flat uint outMaterialIndex[];
 
 void main() {
     uint meshletIndex = IN.meshletIndices[gl_WorkGroupID.x];
@@ -71,15 +74,12 @@ void main() {
         uint vertexIndex = meshletVertices[m.vertexOffset + i];
         Vertex v = vertices[vertexIndex];
 
-        vec4 worldPos = push.modelMatrix * vec4(v.px, v.py, v.pz, 1.0);
-        gl_MeshVerticesEXT[i].gl_Position = ubo.viewProj * worldPos;
+        vec4 worldPos = vec4(v.px, v.py, v.pz, 1.0);
+        gl_MeshVerticesEXT[i].gl_Position = push.mvp * worldPos;
 
         outColor[i] = vec3(v.cx, v.cy, v.cz);
-        
-        vec3 normal = vec3(v.nx, v.ny, v.nz);
-        outNormal[i] = normalize(mat3(push.normalMatrix) * normal);
-        
-        outUV[i] = vec2(v.tx, v.ty);
+        outTexCoord[i] = vec2(v.tx, v.ty);
+        outMaterialIndex[i] = push.materialIndex;
     }
 
     // Process triangles
