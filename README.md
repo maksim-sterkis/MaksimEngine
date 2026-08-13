@@ -26,7 +26,7 @@ For a complete breakdown of every directory, component, and the GPU pipeline flo
 
 > **Visualizing the Engine:** We also have an interactive Mermaid.js diagram showing exactly how data moves from CPU to GPU. Check out the **[Pipeline Flowchart](flow.md)**. 
 > 
-> *Note: When viewing the chart on GitHub, be sure to click the **Fullscreen button** (the expanding arrows icon in the top right of the diagram box) so you can easily read the nodes and use the view controls!*
+> *Note: When viewing the chart on GitHub, be sure to click the **Fullscreen button** (the expanding arrows icon in the top right of the diagram box) so you can easily read the nodes and use the view controls.*
 
 ## Images
 <img width="2251" height="1185" alt="Screenshot 2026-07-09 175616" src="https://github.com/user-attachments/assets/51e2e0f5-ec02-458e-b2f3-72a4e18ddf5e" />
