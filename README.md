@@ -18,7 +18,7 @@ A modern Vulkan game engine written in C++20, designed with next-generation rend
 2. **Hardware Ray Tracing**: Leverage `VK_KHR_ray_tracing_pipeline` (RT cores) for precise shadows, reflections, and ambient occlusion.
 3. **ReSTIR DI / GI**: State-of-the-art reservoir spatiotemporal importance resampling for real-time direct and global illumination.
 
-   A link to the full roadmap: roadmap.md
+Check out the [full roadmap](roadmap.md) for detailed progress and upcoming milestones.
 
 
 ## Images
