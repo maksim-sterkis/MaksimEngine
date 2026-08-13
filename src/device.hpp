@@ -72,5 +72,10 @@ void create_image(const DeviceState &state, uint32_t width, uint32_t height,
                   VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
                   VkImage &image, VkDeviceMemory &imageMemory);
 
+void create_image_with_mips(const DeviceState &state, uint32_t width, uint32_t height, uint32_t mipLevels,
+                  VkFormat format, VkImageTiling tiling,
+                  VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
+                  VkImage &image, VkDeviceMemory &imageMemory);
+
 } // namespace device
 } // namespace vke

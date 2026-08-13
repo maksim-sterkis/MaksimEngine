@@ -2,6 +2,7 @@
 #extension GL_EXT_mesh_shader : require
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_scalar_block_layout : require
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 124) out;
@@ -26,29 +27,31 @@ struct Meshlet {
     uint triangleCount;
 };
 
-layout(set = 0, binding = 0) readonly buffer Meshlets {
+layout(scalar, set = 0, binding = 0) readonly buffer Meshlets {
     Meshlet meshlets[];
 };
 
-layout(set = 0, binding = 1) readonly buffer MeshletVertices {
+layout(scalar, set = 0, binding = 1) readonly buffer MeshletVertices {
     uint meshletVertices[];
 };
 
-layout(set = 0, binding = 2) readonly buffer MeshletTriangles {
+layout(scalar, set = 0, binding = 2) readonly buffer MeshletTriangles {
     uint8_t meshletTriangles[];
 };
 
-layout(set = 0, binding = 3) readonly buffer MeshletBounds {
+layout(scalar, set = 0, binding = 3) readonly buffer MeshletBounds {
     vec4 bounds[];
 };
 
-layout(set = 0, binding = 4) readonly buffer VertexBuffer {
+layout(scalar, set = 0, binding = 4) readonly buffer VertexBuffer {
     Vertex vertices[];
 };
 
 // Push constants for model matrix and material
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
+    mat4 cull_mvp;
+    vec4 cull_local_camera_pos;
     vec4 colorOverride;
     int useOverride;
     int useTriplanar;
@@ -58,6 +61,11 @@ layout(push_constant) uniform PushConstants {
     uint meshletCount;
 } push;
 
+layout(scalar, set = 2, binding = 2) buffer StatsBuffer {
+    uint taskInvocations;
+    uint meshInvocations;
+} stats;
+
 // Outputs to Fragment Shader
 layout(location = 0) out vec3 outColor[];
 layout(location = 1) out vec2 outTexCoord[];
@@ -66,6 +74,10 @@ layout(location = 2) out flat uint outMaterialIndex[];
 void main() {
     uint meshletIndex = IN.meshletIndices[gl_WorkGroupID.x];
     Meshlet m = meshlets[meshletIndex];
+
+    if (gl_LocalInvocationID.x == 0) {
+        atomicAdd(stats.meshInvocations, 1);
+    }
 
     SetMeshOutputsEXT(m.vertexCount, m.triangleCount);
 
@@ -77,7 +89,22 @@ void main() {
         vec4 worldPos = vec4(v.px, v.py, v.pz, 1.0);
         gl_MeshVerticesEXT[i].gl_Position = push.mvp * worldPos;
 
-        outColor[i] = vec3(v.cx, v.cy, v.cz);
+        if (push.debugColors == 1) {
+            uint h = (meshletIndex ^ 61) ^ (meshletIndex >> 16);
+            h = h + (h << 3);
+            h = h ^ (h >> 4);
+            h = h * 0x27d4eb2d;
+            h = h ^ (h >> 15);
+            vec3 col = vec3(
+                float((h >>  0) & 0xFF) / 255.0,
+                float((h >>  8) & 0xFF) / 255.0,
+                float((h >> 16) & 0xFF) / 255.0
+            );
+            // Prevent completely dark colors so meshlets don't look unrendered
+            outColor[i] = mix(col, vec3(1.0), 0.3);
+        } else {
+            outColor[i] = vec3(v.cx, v.cy, v.cz);
+        }
         outTexCoord[i] = vec2(v.tx, v.ty);
         outMaterialIndex[i] = push.materialIndex;
     }

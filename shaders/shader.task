@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
+#extension GL_EXT_scalar_block_layout : require
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
@@ -10,6 +11,8 @@ taskPayloadSharedEXT TaskData OUT;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
+    mat4 cull_mvp;
+    vec4 cull_local_camera_pos;
     vec4 colorOverride;
     int useOverride;
     int useTriplanar;
@@ -17,30 +20,175 @@ layout(push_constant) uniform PushConstants {
     int debugColors;
     uint materialIndex;
     uint meshletCount;
+    int freezeCulling;
 } push;
+
+struct MeshletBounds {
+    vec3 center;
+    float radius;
+    vec3 cone_axis;
+    float cone_cutoff;
+};
+
+layout(scalar, set = 0, binding = 3) readonly buffer BoundsBuffer {
+    MeshletBounds bounds[];
+};
+
+layout(set = 2, binding = 0) uniform sampler2D hizPyramid;
+layout(set = 2, binding = 1) uniform sampler2D frozenHizPyramid;
+
+layout(scalar, set = 2, binding = 2) buffer StatsBuffer {
+    uint taskInvocations;
+    uint meshInvocations;
+} stats;
+
+shared vec4 s_planes[6];
+shared uint s_validCount;
+shared vec2 s_hizSize;
 
 void main() {
     uint meshletIndex = gl_WorkGroupID.x * 32 + gl_LocalInvocationID.x;
     
-    // Write valid meshlet index or an invalid sentinel value (e.g. 0xFFFFFFFF)
+    if (gl_LocalInvocationID.x == 0) {
+        s_validCount = 0;
+        // Extract frustum planes from CULL MVP matrix (Vulkan clip space)
+        s_planes[0] = vec4(push.cull_mvp[0].w + push.cull_mvp[0].x, push.cull_mvp[1].w + push.cull_mvp[1].x, push.cull_mvp[2].w + push.cull_mvp[2].x, push.cull_mvp[3].w + push.cull_mvp[3].x); // Left
+        s_planes[1] = vec4(push.cull_mvp[0].w - push.cull_mvp[0].x, push.cull_mvp[1].w - push.cull_mvp[1].x, push.cull_mvp[2].w - push.cull_mvp[2].x, push.cull_mvp[3].w - push.cull_mvp[3].x); // Right
+        s_planes[2] = vec4(push.cull_mvp[0].w + push.cull_mvp[0].y, push.cull_mvp[1].w + push.cull_mvp[1].y, push.cull_mvp[2].w + push.cull_mvp[2].y, push.cull_mvp[3].w + push.cull_mvp[3].y); // Bottom
+        s_planes[3] = vec4(push.cull_mvp[0].w - push.cull_mvp[0].y, push.cull_mvp[1].w - push.cull_mvp[1].y, push.cull_mvp[2].w - push.cull_mvp[2].y, push.cull_mvp[3].w - push.cull_mvp[3].y); // Top
+        s_planes[4] = vec4(push.cull_mvp[0].z,                      push.cull_mvp[1].z,                      push.cull_mvp[2].z,                      push.cull_mvp[3].z);                      // Near
+        s_planes[5] = vec4(push.cull_mvp[0].w - push.cull_mvp[0].z, push.cull_mvp[1].w - push.cull_mvp[1].z, push.cull_mvp[2].w - push.cull_mvp[2].z, push.cull_mvp[3].w - push.cull_mvp[3].z); // Far
+        
+        for (int i = 0; i < 6; i++) {
+            s_planes[i] /= length(s_planes[i].xyz);
+        }
+        
+        s_hizSize = textureSize(hizPyramid, 0);
+    }
+    
+    barrier();
+    
+    bool visible = false;
+    
     if (meshletIndex < push.meshletCount) {
-        OUT.meshletIndices[gl_LocalInvocationID.x] = meshletIndex;
-    } else {
-        OUT.meshletIndices[gl_LocalInvocationID.x] = 0xFFFFFFFF;
+        MeshletBounds b = bounds[meshletIndex];
+        
+        // 1. Frustum Culling
+        visible = true;
+        for (int i = 0; i < 6; i++) {
+            if (dot(s_planes[i].xyz, b.center) + s_planes[i].w < -b.radius) {
+                visible = false;
+                break;
+            }
+        }
+        
+        // 2. Cone Backface Culling
+        if (visible && b.cone_cutoff < 1.0) {
+            vec3 view_dir = b.center - push.cull_local_camera_pos.xyz;
+            if (dot(view_dir, b.cone_axis) >= b.cone_cutoff * length(view_dir) + b.radius) {
+                visible = false;
+            }
+        }
+        
+        // 3. Occlusion Culling
+        if (visible) {
+            // Compute screen-space bounding box of the sphere
+            vec3 c = b.center;
+            float r = b.radius;
+            
+            vec3 min_pos = c - vec3(r);
+            vec3 max_pos = c + vec3(r);
+            
+            // 8 corners of the AABB
+            vec3 corners[8] = {
+                vec3(min_pos.x, min_pos.y, min_pos.z),
+                vec3(max_pos.x, min_pos.y, min_pos.z),
+                vec3(min_pos.x, max_pos.y, min_pos.z),
+                vec3(max_pos.x, max_pos.y, min_pos.z),
+                vec3(min_pos.x, min_pos.y, max_pos.z),
+                vec3(max_pos.x, min_pos.y, max_pos.z),
+                vec3(min_pos.x, max_pos.y, max_pos.z),
+                vec3(max_pos.x, max_pos.y, max_pos.z)
+            };
+            
+            float min_x = 1.0;
+            float max_x = -1.0;
+            float min_y = 1.0;
+            float max_y = -1.0;
+            float max_z = -1.0; // Reverse-Z: max_z is the nearest point
+            
+            bool any_behind = false;
+            
+            for (int i = 0; i < 8; i++) {
+                vec4 clip = push.cull_mvp * vec4(corners[i], 1.0);
+                if (clip.w <= 0.0) {
+                    any_behind = true;
+                } else {
+                    vec3 ndc = clip.xyz / clip.w;
+                    min_x = min(min_x, ndc.x);
+                    max_x = max(max_x, ndc.x);
+                    min_y = min(min_y, ndc.y);
+                    max_y = max(max_y, ndc.y);
+                    max_z = max(max_z, ndc.z);
+                }
+            }
+            
+            if (!any_behind) {
+                // Convert NDC [-1, 1] to UV [0, 1]
+                vec2 uv_min = vec2(min_x * 0.5 + 0.5, min_y * 0.5 + 0.5);
+                vec2 uv_max = vec2(max_x * 0.5 + 0.5, max_y * 0.5 + 0.5);
+                
+                // Vulkan Y is down, so UV y is reversed from NDC y?
+                // Wait: ndc.y is from top (-1) to bottom (+1).
+                // So min_y corresponds to top, max_y to bottom.
+                // uv.y = ndc.y * 0.5 + 0.5; this means -1 -> 0 (top), +1 -> 1 (bottom).
+                // This is correct!
+                
+                // Clamp to screen
+                uv_min = clamp(uv_min, 0.0, 1.0);
+                uv_max = clamp(uv_max, 0.0, 1.0);
+                
+                vec2 size = (uv_max - uv_min) * s_hizSize;
+                float max_dim = max(max(size.x, size.y), 1.0);
+                
+                if (max_dim > 0.0) {
+                    float level = ceil(log2(max_dim));
+                    
+                    float depth0, depth1, depth2, depth3;
+                    if (push.freezeCulling == 1) {
+                        depth0 = textureLod(frozenHizPyramid, uv_min, level).r;
+                        depth1 = textureLod(frozenHizPyramid, vec2(uv_max.x, uv_min.y), level).r;
+                        depth2 = textureLod(frozenHizPyramid, vec2(uv_min.x, uv_max.y), level).r;
+                        depth3 = textureLod(frozenHizPyramid, uv_max, level).r;
+                    } else {
+                        depth0 = textureLod(hizPyramid, uv_min, level).r;
+                        depth1 = textureLod(hizPyramid, vec2(uv_max.x, uv_min.y), level).r;
+                        depth2 = textureLod(hizPyramid, vec2(uv_min.x, uv_max.y), level).r;
+                        depth3 = textureLod(hizPyramid, uv_max, level).r;
+                    }
+                    
+                    float hiz_depth = min(min(depth0, depth1), min(depth2, depth3));
+                    
+                    // Reverse Z: max_z is the nearest point of the meshlet.
+                    // hiz_depth is the furthest point of the occluders in this region.
+                    if (max_z < hiz_depth) {
+                        visible = false;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (visible) {
+        uint idx = atomicAdd(s_validCount, 1);
+        OUT.meshletIndices[idx] = meshletIndex;
     }
     
     barrier();
     
     if (gl_LocalInvocationID.x == 0) {
-        // Calculate how many meshlets are valid in this task workgroup
-        uint validCount = 0;
-        for (uint i = 0; i < 32; i++) {
-            if (OUT.meshletIndices[i] != 0xFFFFFFFF) {
-                validCount++;
-            }
-        }
-        
-        // Emit only the valid number of mesh workgroups
-        EmitMeshTasksEXT(validCount, 1, 1);
+        uint numEvaluated = min(32, push.meshletCount - gl_WorkGroupID.x * 32);
+        atomicAdd(stats.taskInvocations, numEvaluated);
+        EmitMeshTasksEXT(s_validCount, 1, 1);
     }
 }

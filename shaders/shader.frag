@@ -25,6 +25,8 @@ layout(set = 1, binding = 1) uniform sampler2D textures[]; // Unbounded array
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
+    mat4 cull_mvp;
+    vec4 cull_local_camera_pos;
     vec4 colorOverride;
     int useOverride;
     int useTriplanar;

@@ -8,6 +8,10 @@ namespace vke {
 
 // --- Internal helpers ---
 
+static void create_hiz_descriptors(EngineState &state);
+static void destroy_hiz_descriptors(EngineState &state);
+static void run_hiz_compute_pass(EngineState &state, uint32_t imageIndex);
+
 static void allocate_command_buffers(EngineState &state) {
   size_t count = swapchain::image_count(state.swapchain);
   state.commandBuffers.resize(count);
@@ -34,8 +38,12 @@ void engine::recreate_swapchain(EngineState &state) {
 
   vkDeviceWaitIdle(state.device.device);
 
+  destroy_hiz_descriptors(state);
+
   swapchain::recreate(state.swapchain, state.device,
                       window::get_extent(state.window));
+
+  create_hiz_descriptors(state);
 
   if (!state.commandBuffers.empty()) {
     vkFreeCommandBuffers(state.device.device, state.device.commandPool,
@@ -58,6 +66,17 @@ static void draw_frame(EngineState &state, engine::DrawCallback draw_fn) {
     throw std::runtime_error("failed to acquire swap chain image!");
   }
 
+  // Read and reset SSBO stats
+  if (state.statsMapped.size() > imageIndex && state.statsMapped[imageIndex] != nullptr) {
+      uint32_t* mapped = reinterpret_cast<uint32_t*>(state.statsMapped[imageIndex]);
+      state.taskInvocations = mapped[0];
+      state.meshInvocations = mapped[1];
+      
+      // Reset for the new frame
+      mapped[0] = 0;
+      mapped[1] = 0;
+  }
+
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -65,6 +84,7 @@ static void draw_frame(EngineState &state, engine::DrawCallback draw_fn) {
       VK_SUCCESS) {
     throw std::runtime_error("failed to begin recording command buffer!");
   }
+
 
   VkRenderPassBeginInfo renderPassInfo{};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -76,7 +96,7 @@ static void draw_frame(EngineState &state, engine::DrawCallback draw_fn) {
   std::array<VkClearValue, 2> clearValues{};
   clearValues[0].color = {{state.clearColor[0], state.clearColor[1],
                            state.clearColor[2], state.clearColor[3]}};
-  clearValues[1].depthStencil = {1.0f, 0};
+  clearValues[1].depthStencil = {0.0f, 0};
   renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
   renderPassInfo.pClearValues = clearValues.data();
 
@@ -132,6 +152,8 @@ static void draw_frame(EngineState &state, engine::DrawCallback draw_fn) {
     }
   }
 
+  state.currentImageIndex = imageIndex;
+
   vkCmdSetViewport(state.commandBuffers[imageIndex], 0, 1, &viewport);
   vkCmdSetScissor(state.commandBuffers[imageIndex], 0, 1, &scissor);
 
@@ -141,6 +163,37 @@ static void draw_frame(EngineState &state, engine::DrawCallback draw_fn) {
   gui::end_frame(state.commandBuffers[imageIndex]);
 
   vkCmdEndRenderPass(state.commandBuffers[imageIndex]);
+  run_hiz_compute_pass(state, imageIndex);
+
+  if (state.triggerFreezeCopy) {
+      VkImageCopy copyRegion{};
+      copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      copyRegion.srcSubresource.baseArrayLayer = 0;
+      copyRegion.srcSubresource.layerCount = 1;
+      copyRegion.srcSubresource.mipLevel = 0; // We need to copy ALL mip levels, wait!
+      
+      // Copy all mip levels
+      for (uint32_t mip = 0; mip < state.swapchain.hizMipLevels; mip++) {
+          VkImageCopy region{};
+          region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+          region.srcSubresource.baseArrayLayer = 0;
+          region.srcSubresource.layerCount = 1;
+          region.srcSubresource.mipLevel = mip;
+          region.dstSubresource = region.srcSubresource;
+          
+          uint32_t mipWidth = std::max(1u, state.swapchain.extent.width >> (mip + 1));
+          uint32_t mipHeight = std::max(1u, state.swapchain.extent.height >> (mip + 1));
+          region.extent = {mipWidth, mipHeight, 1};
+          
+          vkCmdCopyImage(state.commandBuffers[imageIndex],
+                         state.swapchain.hizImages[imageIndex], VK_IMAGE_LAYOUT_GENERAL,
+                         state.swapchain.frozenHizImage, VK_IMAGE_LAYOUT_GENERAL,
+                         1, &region);
+      }
+      
+      state.triggerFreezeCopy = false;
+  }
+
   if (vkEndCommandBuffer(state.commandBuffers[imageIndex]) != VK_SUCCESS) {
     throw std::runtime_error("failed to record command buffer!");
   }
@@ -154,6 +207,281 @@ static void draw_frame(EngineState &state, engine::DrawCallback draw_fn) {
     engine::recreate_swapchain(state);
   } else if (result != VK_SUCCESS) {
     throw std::runtime_error("failed to present swap chain image!");
+  }
+}
+
+static void create_hiz_descriptors(EngineState &state) {
+  VkSamplerCreateInfo samplerInfo{};
+  samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  samplerInfo.magFilter = VK_FILTER_NEAREST;
+  samplerInfo.minFilter = VK_FILTER_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.minLod = 0.0f;
+  samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+  
+  if (vkCreateSampler(state.device.device, &samplerInfo, nullptr, &state.depthSampler) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create depth sampler!");
+  }
+
+  size_t imageCount = state.swapchain.images.size();
+  state.hizDescriptorSets.resize(imageCount);
+  for (size_t i = 0; i < imageCount; i++) {
+    state.hizDescriptorSets[i].resize(state.swapchain.hizMipLevels);
+    
+    std::vector<VkDescriptorSetLayout> layouts(state.swapchain.hizMipLevels, state.pipeline.hizSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = state.descriptorPool;
+    allocInfo.descriptorSetCount = state.swapchain.hizMipLevels;
+    allocInfo.pSetLayouts = layouts.data();
+
+    if (vkAllocateDescriptorSets(state.device.device, &allocInfo, state.hizDescriptorSets[i].data()) != VK_SUCCESS) {
+      throw std::runtime_error("failed to allocate hiz descriptor sets!");
+    }
+
+    for (uint32_t mip = 0; mip < state.swapchain.hizMipLevels; mip++) {
+      VkDescriptorImageInfo inputImageInfo{};
+      inputImageInfo.sampler = state.depthSampler;
+      inputImageInfo.imageLayout = (mip == 0) ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+      // If mip == 0, the input is the actual depth buffer!
+      // Otherwise, the input is the previous mip level of the Hi-Z pyramid.
+      if (mip == 0) {
+        inputImageInfo.imageView = state.swapchain.depthImageView;
+      } else {
+        inputImageInfo.imageView = state.swapchain.hizMipImageViews[i][mip - 1];
+      }
+
+      VkDescriptorImageInfo outputImageInfo{};
+      outputImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+      outputImageInfo.imageView = state.swapchain.hizMipImageViews[i][mip];
+
+      std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+
+      descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[0].dstSet = state.hizDescriptorSets[i][mip];
+      descriptorWrites[0].dstBinding = 0;
+      descriptorWrites[0].dstArrayElement = 0;
+      descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      descriptorWrites[0].descriptorCount = 1;
+      descriptorWrites[0].pImageInfo = &inputImageInfo;
+
+      descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[1].dstSet = state.hizDescriptorSets[i][mip];
+      descriptorWrites[1].dstBinding = 1;
+      descriptorWrites[1].dstArrayElement = 0;
+      descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+      descriptorWrites[1].descriptorCount = 1;
+      descriptorWrites[1].pImageInfo = &outputImageInfo;
+
+      vkUpdateDescriptorSets(state.device.device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+    }
+  }
+
+  // Allocate frame descriptor sets (Set 2)
+  state.frameDescriptorSets.resize(imageCount);
+  
+  // Create stats SSBOs
+  state.statsBuffers.resize(imageCount);
+  state.statsBuffersMemory.resize(imageCount);
+  state.statsMapped.resize(imageCount);
+  
+  for (size_t i = 0; i < imageCount; i++) {
+      VkDeviceSize bufferSize = sizeof(uint32_t) * 2;
+      device::create_buffer(state.device, bufferSize, 
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                            state.statsBuffers[i], state.statsBuffersMemory[i]);
+      vkMapMemory(state.device.device, state.statsBuffersMemory[i], 0, bufferSize, 0, &state.statsMapped[i]);
+  }
+  std::vector<VkDescriptorSetLayout> frameLayouts(imageCount, state.pipeline.frameSetLayout);
+  VkDescriptorSetAllocateInfo frameAllocInfo{};
+  frameAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  frameAllocInfo.descriptorPool = state.descriptorPool;
+  frameAllocInfo.descriptorSetCount = static_cast<uint32_t>(imageCount);
+  frameAllocInfo.pSetLayouts = frameLayouts.data();
+
+  if (vkAllocateDescriptorSets(state.device.device, &frameAllocInfo, state.frameDescriptorSets.data()) != VK_SUCCESS) {
+    throw std::runtime_error("failed to allocate frame descriptor sets!");
+  }
+
+  for (size_t i = 0; i < imageCount; i++) {
+    size_t prevFrame = (i + imageCount - 1) % imageCount;
+
+    VkDescriptorImageInfo frameImageInfo{};
+    frameImageInfo.sampler = state.depthSampler;
+    frameImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    frameImageInfo.imageView = state.swapchain.hizImageViews[prevFrame];
+
+    VkDescriptorImageInfo frozenFrameImageInfo{};
+    frozenFrameImageInfo.sampler = state.depthSampler;
+    frozenFrameImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    frozenFrameImageInfo.imageView = state.swapchain.frozenHizImageView;
+
+    VkDescriptorBufferInfo statsBufferInfo{};
+    statsBufferInfo.buffer = state.statsBuffers[i];
+    statsBufferInfo.offset = 0;
+    statsBufferInfo.range = sizeof(uint32_t) * 2;
+
+    std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+
+    descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[0].dstSet = state.frameDescriptorSets[i];
+    descriptorWrites[0].dstBinding = 0;
+    descriptorWrites[0].dstArrayElement = 0;
+    descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[0].descriptorCount = 1;
+    descriptorWrites[0].pImageInfo = &frameImageInfo;
+
+    descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[1].dstSet = state.frameDescriptorSets[i];
+    descriptorWrites[1].dstBinding = 1;
+    descriptorWrites[1].dstArrayElement = 0;
+    descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[1].descriptorCount = 1;
+    descriptorWrites[1].pImageInfo = &frozenFrameImageInfo;
+
+    descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[2].dstSet = state.frameDescriptorSets[i];
+    descriptorWrites[2].dstBinding = 2;
+    descriptorWrites[2].dstArrayElement = 0;
+    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[2].descriptorCount = 1;
+    descriptorWrites[2].pBufferInfo = &statsBufferInfo;
+
+    vkUpdateDescriptorSets(state.device.device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+  }
+}
+
+static void destroy_hiz_descriptors(EngineState &state) {
+  for (size_t i = 0; i < state.hizDescriptorSets.size(); i++) {
+    if (!state.hizDescriptorSets[i].empty()) {
+      vkFreeDescriptorSets(state.device.device, state.descriptorPool,
+                           static_cast<uint32_t>(state.hizDescriptorSets[i].size()),
+                           state.hizDescriptorSets[i].data());
+    }
+  }
+  state.hizDescriptorSets.clear();
+
+  if (!state.frameDescriptorSets.empty()) {
+    vkFreeDescriptorSets(state.device.device, state.descriptorPool,
+                         static_cast<uint32_t>(state.frameDescriptorSets.size()),
+                         state.frameDescriptorSets.data());
+    state.frameDescriptorSets.clear();
+  }
+  
+  for (size_t i = 0; i < state.statsBuffers.size(); i++) {
+      vkUnmapMemory(state.device.device, state.statsBuffersMemory[i]);
+      vkDestroyBuffer(state.device.device, state.statsBuffers[i], nullptr);
+      vkFreeMemory(state.device.device, state.statsBuffersMemory[i], nullptr);
+  }
+  state.statsBuffers.clear();
+  state.statsBuffersMemory.clear();
+  state.statsMapped.clear();
+
+  if (state.depthSampler != VK_NULL_HANDLE) {
+    vkDestroySampler(state.device.device, state.depthSampler, nullptr);
+    state.depthSampler = VK_NULL_HANDLE;
+  }
+}
+
+static void run_hiz_compute_pass(EngineState &state, uint32_t imageIndex) {
+  VkCommandBuffer cmd = state.commandBuffers[imageIndex];
+
+  // Transition Depth Image to SHADER_READ_ONLY_OPTIMAL
+  VkImageMemoryBarrier depthBarrier{};
+  depthBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  depthBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+  depthBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  depthBarrier.image = state.swapchain.depthImage;
+  depthBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+  depthBarrier.subresourceRange.baseMipLevel = 0;
+  depthBarrier.subresourceRange.levelCount = 1;
+  depthBarrier.subresourceRange.baseArrayLayer = 0;
+  depthBarrier.subresourceRange.layerCount = 1;
+  depthBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  depthBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &depthBarrier);
+
+  // Transition all mips of Hi-Z Image to GENERAL (from UNDEFINED or GENERAL)
+  VkImageMemoryBarrier hizBarrier{};
+  hizBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  hizBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; 
+  hizBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  hizBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  hizBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  hizBarrier.image = state.swapchain.hizImages[imageIndex];
+  hizBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  hizBarrier.subresourceRange.baseMipLevel = 0;
+  hizBarrier.subresourceRange.levelCount = state.swapchain.hizMipLevels;
+  hizBarrier.subresourceRange.baseArrayLayer = 0;
+  hizBarrier.subresourceRange.layerCount = 1;
+  hizBarrier.srcAccessMask = 0;
+  hizBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &hizBarrier);
+
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, state.pipeline.hizPipeline);
+
+  uint32_t currentWidth = state.swapchain.extent.width;
+  uint32_t currentHeight = state.swapchain.extent.height;
+
+  for (uint32_t mip = 0; mip < state.swapchain.hizMipLevels; mip++) {
+    // Each mip level calculates the min depth of a 2x2 area from the previous level.
+    // If mip == 0, it reads from the full depth buffer and writes to hiz mip 0.
+    // However, hiz mip 0 IS the same size as depth buffer if we just copy it, but wait:
+    // If hiz mip 0 is half the size, then currentWidth = max(1, width / 2).
+    // Let's assume hiz mip 0 is the full size! No, my compute shader uses invOutputSize.
+    // Let's make hiz mip 0 half the size of depth buffer.
+    
+    currentWidth = std::max(1u, currentWidth / 2);
+    currentHeight = std::max(1u, currentHeight / 2);
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, state.pipeline.hizLayout, 0, 1,
+                            &state.hizDescriptorSets[imageIndex][mip], 0, nullptr);
+
+    struct {
+      glm::vec2 invOutputSize;
+      int sourceMip;
+    } push;
+    push.invOutputSize = glm::vec2(1.0f / currentWidth, 1.0f / currentHeight);
+    push.sourceMip = 0; // The shader always samples from mip 0 because the view has levelCount=1
+
+    vkCmdPushConstants(cmd, state.pipeline.hizLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+
+    uint32_t groupX = (currentWidth + 15) / 16;
+    uint32_t groupY = (currentHeight + 15) / 16;
+    vkCmdDispatch(cmd, groupX, groupY, 1);
+
+    if (mip < state.swapchain.hizMipLevels - 1) {
+      VkImageMemoryBarrier mipBarrier{};
+      mipBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      mipBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+      mipBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+      mipBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      mipBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      mipBarrier.image = state.swapchain.hizImages[imageIndex];
+      mipBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      mipBarrier.subresourceRange.baseMipLevel = mip;
+      mipBarrier.subresourceRange.levelCount = 1;
+      mipBarrier.subresourceRange.baseArrayLayer = 0;
+      mipBarrier.subresourceRange.layerCount = 1;
+      mipBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      mipBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                           nullptr, 1, &mipBarrier);
+    }
   }
 }
 
@@ -180,17 +508,19 @@ void init(EngineState &state, const EngineConfig &config) {
                    config.fragmentShaderPath);
   allocate_command_buffers(state);
 
-  std::array<VkDescriptorPoolSize, 2> poolSizes{};
+  std::array<VkDescriptorPoolSize, 3> poolSizes{};
   poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   poolSizes[0].descriptorCount = 100000;
   poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   poolSizes[1].descriptorCount = 100;
+  poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  poolSizes[2].descriptorCount = 100;
 
   VkDescriptorPoolCreateInfo poolInfo{};
   poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
   poolInfo.pPoolSizes = poolSizes.data();
-  poolInfo.maxSets = 10;
+  poolInfo.maxSets = 50;
   poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
   if (vkCreateDescriptorPool(state.device.device, &poolInfo, nullptr,
@@ -218,6 +548,8 @@ void init(EngineState &state, const EngineConfig &config) {
     throw std::runtime_error("failed to allocate global descriptor set!");
   }
 
+  create_hiz_descriptors(state);
+
   gui::init(state.imgui, state);
 }
 
@@ -242,6 +574,8 @@ void run(EngineState &state, UpdateCallback update_fn, DrawCallback draw_fn) {
 }
 
 void cleanup(EngineState &state) {
+  destroy_hiz_descriptors(state);
+
   vkDestroyDescriptorPool(state.device.device, state.descriptorPool, nullptr);
   gui::destroy(state.imgui, state.device.device);
   pipeline::destroy(state.pipeline, state.device.device);

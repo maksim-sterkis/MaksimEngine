@@ -32,6 +32,10 @@ vke::Entity boulder_entity;
 
 vke::CameraState camera_state;
 bool pointer_locked = false;
+bool enable_meshlet_colors = false;
+bool freeze_culling = false;
+glm::mat4 frozen_cull_mvp = glm::mat4(1.0f);
+glm::vec4 frozen_cull_local_camera_pos = glm::vec4(0.0f);
 
 bool point_in_triangle(float px, float py, float x1, float y1, float x2,
                        float y2, float x3, float y3) {
@@ -118,11 +122,11 @@ void update_game(EngineState &state, float dt) {
     }
   }
 
-  // Convert mouse to viewport NDC
+  // Convert mouse to viewport NDC (Y is inverted: +1 top, -1 bottom)
   float ndc_x =
       vpW > 0.0f ? ((static_cast<float>(mx) - vpX) / vpW) * 2.0f - 1.0f : 0.0f;
   float ndc_y =
-      vpH > 0.0f ? ((static_cast<float>(my) - vpY) / vpH) * 2.0f - 1.0f : 0.0f;
+      vpH > 0.0f ? 1.0f - ((static_cast<float>(my) - vpY) / vpH) * 2.0f : 0.0f;
 
   bool over_ui = ImGui::GetIO().WantCaptureMouse;
 
@@ -173,10 +177,17 @@ void update_game(EngineState &state, float dt) {
   prev_key_3 = curr_key_3;
   prev_key_p = curr_key_p;
 
+  static bool prev_f2 = false;
   static bool prev_f3 = false;
   static bool prev_esc = false;
+  bool curr_f2 = input::is_key_pressed(state.input, GLFW_KEY_F2);
   bool curr_f3 = input::is_key_pressed(state.input, GLFW_KEY_F3);
   bool curr_esc = input::is_key_pressed(state.input, GLFW_KEY_ESCAPE);
+
+  if (curr_f2 && !prev_f2) {
+      freeze_culling = !freeze_culling;
+  }
+  prev_f2 = curr_f2;
 
   static bool show_ui = false;
   if (curr_f3 && !prev_f3) {
@@ -197,6 +208,31 @@ void update_game(EngineState &state, float dt) {
     ImGui::RadioButton("Fixed (Black Bars)", &mode,
                        static_cast<int>(AspectMode::FIXED));
     state.aspectMode = static_cast<AspectMode>(mode);
+    
+    ImGui::Separator();
+    ImGui::Text("Mesh Shader:");
+    ImGui::Checkbox("Meshlet Debug Colors", &enable_meshlet_colors);
+    
+    static bool prev_freeze = false;
+    ImGui::Checkbox("Freeze Culling", &freeze_culling);
+    if (freeze_culling && !prev_freeze) {
+        state.triggerFreezeCopy = true;
+    }
+    prev_freeze = freeze_culling;
+    
+    ImGui::Separator();
+    ImGui::Text("Meshlet Culling Stats (Previous Frame):");
+    uint64_t evaluated = state.taskInvocations;
+    uint64_t drawn = state.meshInvocations;
+    ImGui::Text("  Evaluated (Task): %llu", evaluated);
+    ImGui::Text("  Drawn     (Mesh): %llu", drawn);
+    if (evaluated > 0) {
+        uint64_t culled = evaluated - drawn;
+        float percent = (static_cast<float>(culled) / evaluated) * 100.0f;
+        ImGui::Text("  Culled:           %llu (%.1f%%)", culled, percent);
+    } else {
+        ImGui::Text("  Culled:           0");
+    }
 
     ImGui::Separator();
     int window_mode = static_cast<int>(state.window.currentMode);
@@ -266,15 +302,11 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
   float winAspect = winW > 0.0f && winH > 0.0f ? winW / winH : 1.0f;
   float targetAspect = static_cast<float>(state.baseWidth) /
                        static_cast<float>(state.baseHeight);
+  if (state.aspectMode == AspectMode::FIXED) {
+      winAspect = targetAspect;
+  }
 
   vke::PushConstantData push{};
-
-  // Bind Global Descriptor Set (Not used directly by graphics pipeline in visibility buffer approach, but we bind it anyway for later)
-  if (state.globalDescriptorSet != VK_NULL_HANDLE) {
-      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              state.pipeline.layout, 1, 1,
-                              &state.globalDescriptorSet, 0, nullptr);
-  }
 
   for (vke::Entity e : ecs_registry.active_entities) {
     vke::Transform *transform = vke::ecs::get_transform(ecs_registry, e);
@@ -291,38 +323,63 @@ void draw_scene(EngineState &state, VkCommandBuffer cmd) {
       continue;
 
     glm::mat4 model_mat = transform->get_matrix();
+    push.debugColors = enable_meshlet_colors ? 1 : 0;
 
-    if (current_view == 1) {
-      glm::mat4 ortho = glm::mat4(1.0f);
+    if (current_view == 1 || current_view == 2) {
+      float aspect = winAspect > 0.0f ? winAspect : 1.0f;
+      glm::mat4 ortho = glm::ortho(-aspect, aspect, -1.0f, 1.0f, 10.0f, -10.0f);
+      ortho[1][1] *= -1; // Vulkan Y-down
       push.mvp = ortho * model_mat;
-      push.useOverride = 1;
-
-      if (triangle_color_idx == 0) {
-        push.useOverride = 0;
-      } else if (triangle_color_idx == 1) {
-        push.colorOverride = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
-      } else if (triangle_color_idx == 2) {
-        push.useOverride = 0;
+      
+      if (current_view == 1) {
+          push.useOverride = 1;
+          if (triangle_color_idx == 0) {
+            push.useOverride = 0;
+          } else if (triangle_color_idx == 1) {
+            push.colorOverride = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+          } else if (triangle_color_idx == 2) {
+            push.colorOverride = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+          }
       } else {
-        push.colorOverride = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+          push.useOverride = 0;
       }
-    } else {
-      glm::mat4 proj = glm::perspective(glm::radians(45.0f), winAspect, 0.1f, 100.0f);
-      proj[1][1] *= -1;
+    } else if (current_view == 3) {
+      // Reverse-Z: swapping near/far in GLM produces ndc.z from 1.0 (near) to 0.0 (far)
+      glm::mat4 proj = glm::perspective(glm::radians(45.0f), winAspect, 100.0f, 0.1f);
+      proj[1][1] *= -1; // Vulkan Y-flip
 
       glm::mat4 view = vke::camera::get_view_matrix(camera_state);
       push.mvp = proj * view * model_mat;
       push.useOverride = 0;
     }
+    
+    glm::vec3 world_cam_pos = (current_view == 3) ? camera_state.position : glm::vec3(0.0f, 0.0f, 1.0f);
+    glm::mat4 inv_model = glm::inverse(model_mat);
+    glm::vec4 local_cam_pos = inv_model * glm::vec4(world_cam_pos, 1.0f);
+    
+    if (!freeze_culling) {
+        frozen_cull_mvp = push.mvp;
+        frozen_cull_local_camera_pos = local_cam_pos;
+    }
+    push.cull_mvp = frozen_cull_mvp;
+    push.cull_local_camera_pos = frozen_cull_local_camera_pos;
+    push.freezeCulling = freeze_culling ? 1 : 0;
 
     const vke::ModelData *modelData =
         vke::asset::get_model(asset_pool, mesh->model_handle);
     if (modelData && modelData->meshletCount > 0) {
       // Bind model SSBOs
       if (modelData->descriptorSet != VK_NULL_HANDLE) {
+          VkDescriptorSet sets[3] = {
+              modelData->descriptorSet,
+              state.globalDescriptorSet,
+              state.frameDescriptorSets.empty() ? VK_NULL_HANDLE : state.frameDescriptorSets[state.currentImageIndex]
+          };
+          uint32_t setCount = 3;
+          
           vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  state.pipeline.layout, 0, 1,
-                                  &modelData->descriptorSet, 0, nullptr);
+                                  state.pipeline.layout, 0, setCount,
+                                  sets, 0, nullptr);
       }
 
       push.materialIndex = modelData->subMeshes.empty() ? 0 : modelData->subMeshes[0].materialIndex;

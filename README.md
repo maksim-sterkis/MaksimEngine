@@ -9,10 +9,12 @@ A modern Vulkan game engine written in C++20, designed with next-generation rend
 - **Embedded Textures & Meshlets**: The compiler natively reads raw PBR texture files (JPEGs/PNGs) and packages them dynamically into the `.glb` buffers, and uses `meshoptimizer` to append partitioned Meshlets (vertex/triangle arrays) for high-performance geometry culling.
 - **Dynamic Asset Pool**: Robust texture and model pooling system preventing duplicate GPU uploads and seamlessly switching between raw JPEG/PNG loading (using `stb_image`) and compressed formats.
 - **PBR Materials**: Complete physical based rendering foundation with Cook-Torrance BRDF (Albedo, Normal, Metallic, Roughness) via SSBOs.
+- **Mesh Shaders & Advanced Culling**: Uses `VK_EXT_mesh_shader` for sub-mesh geometry culling (Frustum, Cone Backface, and Hi-Z Occlusion) driven entirely on the GPU.
+- **Perfect Memory Packing**: Uses `GL_EXT_scalar_block_layout` to map C++ structs exactly to GPU memory without any padding overhead.
 
 ## Roadmap & Upcoming Features
 
-1. **Mesh Shaders & Visibility Buffer**: Transition to `VK_EXT_mesh_shader` for high-performance sub-mesh geometry culling.
+1. **Visibility Buffer**: Decouple geometry rasterization from heavy material evaluation by outputting ID buffers and shading via a compute pass.
 2. **Hardware Ray Tracing**: Leverage `VK_KHR_ray_tracing_pipeline` (RT cores) for precise shadows, reflections, and ambient occlusion.
 3. **ReSTIR DI / GI**: State-of-the-art reservoir spatiotemporal importance resampling for real-time direct and global illumination.
 

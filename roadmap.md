@@ -30,14 +30,25 @@ This plan outlines the next major architectural upgrades for the engine, focusin
   2. Implemented Schlick-GGX, Smith Geometry, and Fresnel equations in `shader.frag`.
   3. Extracted and mapped multi-texture PBR payloads from GLB models dynamically to the Bindless array.
 
-## Phase 3 (Meshlets & Visibility Buffer)
-- **Status**: 🚧 **IN PROGRESS**
-- **Goal**: Replace legacy vertex pipelines with Task/Mesh shaders (`VK_EXT_mesh_shader`).
-- **Why**: Unlocks extreme GPU geometry culling (frustum, occlusion) at a sub-mesh granularity.
+## Phase 3 (Meshlets & Advanced Culling)
+- **Status**: ✅ **COMPLETED**
+- **Goal**: Replace legacy vertex pipelines with Task/Mesh shaders (`VK_EXT_mesh_shader`) featuring sub-mesh level Frustum, Cone Backface, and Hi-Z Occlusion Culling.
+- **Why**: Unlocks extreme GPU geometry culling at a sub-mesh granularity, evaluating thousands of meshlets in fractions of a millisecond.
+- **Tasks Completed**:
+  1. Offline tool extension to partition `ModelData` into meshlets (max 64 vertices, 124 triangles) using `meshoptimizer`.
+  2. Create Task and Mesh shaders to evaluate bounding spheres, extract frustum planes, and emit visible meshlets.
+  3. Generate and bind a multi-mip Hi-Z depth pyramid for mathematically perfect, conservative occlusion culling.
+  4. Implement ultra-fast SSBO atomic counters to safely track evaluated vs. drawn meshlets without triggering Nvidia driver bottlenecks.
+
+## Phase 3.5 (Visibility Buffer)
+- **Status**: ⏳ **PENDING**
+- **Goal**: Transition the engine to a true Visibility Buffer architecture.
+- **Why**: Decouples geometry rasterization from heavy material evaluation. By outputting only a 64-bit payload per pixel, we achieve absolute zero overdraw for complex PBR materials—critical for rendering millions of sub-pixel triangles (a la Nanite).
 - **Tasks**:
-  1. ✅ Write a compute shader or offline tool extension to partition `ModelData` into meshlets (max 64 vertices, 126 triangles).
-  2. ✅ Create Task and Mesh shaders to evaluate and output geometry.
-  3. ⏳ Switch to a two-pass Visibility Buffer workflow to decouple geometry from heavy material evaluation.
+  1. Enable `VK_KHR_fragment_shader_barycentric`.
+  2. Create a Visibility Buffer render target (e.g., `R32G32_UINT`).
+  3. Modify the Mesh Shader to only output `InstanceID`, `MeshletID`, and `TriangleID` to the screen.
+  4. Create a fullscreen compute pass (`deferred.comp`) to read the Visibility Buffer, manually fetch the 3 vertices via SSBOs, compute barycentrics, interpolate UVs/Normals, and execute the PBR shading.
 
 ## Phase 4 (Hardware Ray Tracing - RT Pipeline)
 - **Status**: ⏳ **PENDING**
@@ -46,7 +57,7 @@ This plan outlines the next major architectural upgrades for the engine, focusin
 - **Tasks**:
   1. Build a Bottom-Level Acceleration Structure (BLAS) for every static mesh, and a Top-Level Acceleration Structure (TLAS) for scene instances.
   2. Implement Ray Generation, Closest Hit, and Miss shaders to trace scene intersections.
-  3. Write a compute shader or RT pipeline pass to evaluate direct shadowing using ray queries against the TLAS.
+  3. Write an RT pass to evaluate direct shadowing using ray queries against the TLAS.
 
 ## Phase 5 (Next-Gen Lighting - ReSTIR & Denoising)
 - **Status**: ⏳ **PENDING**

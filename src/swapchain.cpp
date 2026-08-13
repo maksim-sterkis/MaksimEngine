@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <iostream>
 
 
 namespace vke {
@@ -135,7 +137,7 @@ static void create_depth_resources(SwapchainState &state,
 
   device::create_image(dev, state.extent.width, state.extent.height,
                        state.depthFormat, VK_IMAGE_TILING_OPTIMAL,
-                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, state.depthImage,
                        state.depthImageMemory);
 
@@ -154,6 +156,147 @@ static void create_depth_resources(SwapchainState &state,
                         &state.depthImageView) != VK_SUCCESS) {
     throw std::runtime_error("failed to create depth image view!");
   }
+}
+
+static void create_hiz_resources(SwapchainState &state, const DeviceState &dev) {
+  uint32_t hizWidth = std::max(1u, state.extent.width / 2);
+  uint32_t hizHeight = std::max(1u, state.extent.height / 2);
+  uint32_t maxDim = std::max(hizWidth, hizHeight);
+  state.hizMipLevels = static_cast<uint32_t>(std::floor(std::log2(maxDim))) + 1;
+
+  size_t imageCount = state.images.size();
+  state.hizImages.resize(imageCount);
+  state.hizImageMemories.resize(imageCount);
+  state.hizImageViews.resize(imageCount);
+  state.hizMipImageViews.resize(imageCount);
+
+  for (size_t i = 0; i < imageCount; i++) {
+    device::create_image_with_mips(dev, hizWidth, hizHeight, state.hizMipLevels,
+                                   VK_FORMAT_R32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, state.hizImages[i],
+                                   state.hizImageMemories[i]);
+
+    std::cout << "hizImage[" << i << "] handle = " << state.hizImages[i] << "\n";
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = state.hizImages[i];
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R32_SFLOAT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = state.hizMipLevels;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(dev.device, &viewInfo, nullptr, &state.hizImageViews[i]) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create hiz image view!");
+    }
+
+    state.hizMipImageViews[i].resize(state.hizMipLevels);
+    for (uint32_t mip = 0; mip < state.hizMipLevels; mip++) {
+      VkImageViewCreateInfo mipViewInfo{};
+      mipViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      mipViewInfo.image = state.hizImages[i];
+      mipViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      mipViewInfo.format = VK_FORMAT_R32_SFLOAT;
+      mipViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      mipViewInfo.subresourceRange.baseMipLevel = mip;
+      mipViewInfo.subresourceRange.levelCount = 1;
+      mipViewInfo.subresourceRange.baseArrayLayer = 0;
+      mipViewInfo.subresourceRange.layerCount = 1;
+
+      if (vkCreateImageView(dev.device, &mipViewInfo, nullptr, &state.hizMipImageViews[i][mip]) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create hiz mip image view!");
+      }
+    }
+  }
+
+  // Transition all hizImages to GENERAL layout initially
+  VkCommandBufferAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  allocInfo.commandPool = dev.commandPool;
+  allocInfo.commandBufferCount = 1;
+
+  VkCommandBuffer commandBuffer;
+  vkAllocateCommandBuffers(dev.device, &allocInfo, &commandBuffer);
+
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+  for (size_t i = 0; i < imageCount; i++) {
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = state.hizImages[i];
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = state.hizMipLevels;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+  }
+
+  // Create Frozen Hi-Z image
+  device::create_image_with_mips(dev, hizWidth, hizHeight, state.hizMipLevels,
+                       VK_FORMAT_R32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, state.frozenHizImage,
+                       state.frozenHizImageMemory);
+
+  VkImageViewCreateInfo frozenViewInfo{};
+  frozenViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  frozenViewInfo.image = state.frozenHizImage;
+  frozenViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  frozenViewInfo.format = VK_FORMAT_R32_SFLOAT;
+  frozenViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  frozenViewInfo.subresourceRange.baseMipLevel = 0;
+  frozenViewInfo.subresourceRange.levelCount = state.hizMipLevels;
+  frozenViewInfo.subresourceRange.baseArrayLayer = 0;
+  frozenViewInfo.subresourceRange.layerCount = 1;
+
+  if (vkCreateImageView(dev.device, &frozenViewInfo, nullptr, &state.frozenHizImageView) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create frozen hiz image view!");
+  }
+
+  VkImageMemoryBarrier frozenBarrier{};
+  frozenBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  frozenBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  frozenBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  frozenBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  frozenBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  frozenBarrier.image = state.frozenHizImage;
+  frozenBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  frozenBarrier.subresourceRange.baseMipLevel = 0;
+  frozenBarrier.subresourceRange.levelCount = state.hizMipLevels;
+  frozenBarrier.subresourceRange.baseArrayLayer = 0;
+  frozenBarrier.subresourceRange.layerCount = 1;
+  frozenBarrier.srcAccessMask = 0;
+  frozenBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &frozenBarrier);
+
+  vkEndCommandBuffer(commandBuffer);
+
+  VkSubmitInfo submitInfo{};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &commandBuffer;
+
+  vkQueueSubmit(dev.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+  vkQueueWaitIdle(dev.graphicsQueue);
+
+  vkFreeCommandBuffers(dev.device, dev.commandPool, 1, &commandBuffer);
 }
 
 static void create_image_views(SwapchainState &state, VkDevice device) {
@@ -196,12 +339,12 @@ static void create_render_pass(SwapchainState &state, VkDevice device) {
   depthAttachment.format = state.depthFormat;
   depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
   depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
   depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
   depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
   depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   depthAttachment.finalLayout =
-      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+      VK_IMAGE_LAYOUT_GENERAL;
 
   VkAttachmentReference depthAttachmentRef{};
   depthAttachmentRef.attachment = 1;
@@ -306,6 +449,7 @@ void create(SwapchainState &state, const DeviceState &dev,
   create_image_views(state, dev.device);
   create_depth_resources(state, dev);
   create_render_pass(state, dev.device);
+  create_hiz_resources(state, dev);
   create_framebuffers(state, dev.device);
   create_sync_objects(state, dev.device);
 }
@@ -313,6 +457,10 @@ void create(SwapchainState &state, const DeviceState &dev,
 void recreate(SwapchainState &state, const DeviceState &dev,
               VkExtent2D windowExtent) {
   VkSwapchainKHR oldSwapchain = state.swapchain;
+
+  if (state.renderPass != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(dev.device, state.renderPass, nullptr);
+  }
 
   for (auto fb : state.framebuffers) {
     vkDestroyFramebuffer(dev.device, fb, nullptr);
@@ -328,6 +476,24 @@ void recreate(SwapchainState &state, const DeviceState &dev,
   vkDestroyImage(dev.device, state.depthImage, nullptr);
   vkFreeMemory(dev.device, state.depthImageMemory, nullptr);
 
+  for (size_t i = 0; i < state.hizImages.size(); i++) {
+    for (size_t mip = 0; mip < state.hizMipLevels; mip++) {
+      vkDestroyImageView(dev.device, state.hizMipImageViews[i][mip], nullptr);
+    }
+    vkDestroyImageView(dev.device, state.hizImageViews[i], nullptr);
+    vkDestroyImage(dev.device, state.hizImages[i], nullptr);
+    vkFreeMemory(dev.device, state.hizImageMemories[i], nullptr);
+  }
+
+  if (state.frozenHizImageView != VK_NULL_HANDLE) {
+    vkDestroyImageView(dev.device, state.frozenHizImageView, nullptr);
+    vkDestroyImage(dev.device, state.frozenHizImage, nullptr);
+    vkFreeMemory(dev.device, state.frozenHizImageMemory, nullptr);
+    state.frozenHizImageView = VK_NULL_HANDLE;
+    state.frozenHizImage = VK_NULL_HANDLE;
+    state.frozenHizImageMemory = VK_NULL_HANDLE;
+  }
+
   create_swapchain_khr(state, dev, windowExtent, oldSwapchain);
 
   if (oldSwapchain != VK_NULL_HANDLE) {
@@ -336,6 +502,8 @@ void recreate(SwapchainState &state, const DeviceState &dev,
 
   create_image_views(state, dev.device);
   create_depth_resources(state, dev);
+  create_render_pass(state, dev.device);
+  create_hiz_resources(state, dev);
   create_framebuffers(state, dev.device);
 
   state.imagesInFlight.clear();
@@ -343,9 +511,33 @@ void recreate(SwapchainState &state, const DeviceState &dev,
 }
 
 void destroy(SwapchainState &state, VkDevice device) {
-  vkDestroyImageView(device, state.depthImageView, nullptr);
-  vkDestroyImage(device, state.depthImage, nullptr);
-  vkFreeMemory(device, state.depthImageMemory, nullptr);
+  if (state.depthImageView != VK_NULL_HANDLE) {
+    vkDestroyImageView(device, state.depthImageView, nullptr);
+    vkDestroyImage(device, state.depthImage, nullptr);
+    vkFreeMemory(device, state.depthImageMemory, nullptr);
+  }
+
+  for (size_t i = 0; i < state.hizImages.size(); i++) {
+    for (size_t mip = 0; mip < state.hizMipLevels; mip++) {
+      vkDestroyImageView(device, state.hizMipImageViews[i][mip], nullptr);
+    }
+    vkDestroyImageView(device, state.hizImageViews[i], nullptr);
+    vkDestroyImage(device, state.hizImages[i], nullptr);
+    vkFreeMemory(device, state.hizImageMemories[i], nullptr);
+  }
+  state.hizImages.clear();
+  state.hizImageMemories.clear();
+  state.hizImageViews.clear();
+  state.hizMipImageViews.clear();
+
+  if (state.frozenHizImageView != VK_NULL_HANDLE) {
+    vkDestroyImageView(device, state.frozenHizImageView, nullptr);
+    vkDestroyImage(device, state.frozenHizImage, nullptr);
+    vkFreeMemory(device, state.frozenHizImageMemory, nullptr);
+    state.frozenHizImageView = VK_NULL_HANDLE;
+    state.frozenHizImage = VK_NULL_HANDLE;
+    state.frozenHizImageMemory = VK_NULL_HANDLE;
+  }
 
   for (auto view : state.imageViews) {
     vkDestroyImageView(device, view, nullptr);

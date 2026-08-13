@@ -17,8 +17,41 @@
 #include <vector>
 #include <cstring>
 #include <cmath>
+#include <glm/glm.hpp>
 
 namespace fs = std::filesystem;
+
+void normalize_winding_order(const float* positions, size_t posStride, const float* normals, size_t normStride, uint32_t* indices, size_t indexCount) {
+    if (!normals) return;
+    int flippedCount = 0;
+    for (size_t i = 0; i < indexCount; i += 3) {
+        uint32_t i0 = indices[i];
+        uint32_t i1 = indices[i+1];
+        uint32_t i2 = indices[i+2];
+        
+        const float* p0 = (const float*)((const char*)positions + i0 * posStride);
+        const float* p1 = (const float*)((const char*)positions + i1 * posStride);
+        const float* p2 = (const float*)((const char*)positions + i2 * posStride);
+        
+        glm::vec3 v0 = glm::vec3(p0[0], p0[1], p0[2]);
+        glm::vec3 v1 = glm::vec3(p1[0], p1[1], p1[2]);
+        glm::vec3 v2 = glm::vec3(p2[0], p2[1], p2[2]);
+        
+        const float* n0_ptr = (const float*)((const char*)normals + i0 * normStride);
+        glm::vec3 n0 = glm::vec3(n0_ptr[0], n0_ptr[1], n0_ptr[2]);
+        
+        glm::vec3 geo_normal = glm::cross(v1 - v0, v2 - v0);
+        
+        if (glm::dot(geo_normal, n0) < 0.0f) {
+            indices[i+1] = i2;
+            indices[i+2] = i1;
+            flippedCount++;
+        }
+    }
+    if (flippedCount > 0) {
+        std::cout << "  Fixed winding order: Flipped " << flippedCount << " CW triangles to CCW.\n";
+    }
+}
 
 // ---- Meshlet file format ----
 // Written as a sidecar .meshlet binary alongside the .glb
@@ -207,6 +240,7 @@ void compile_gltf_model(const std::string& inputPath, const std::string& outputP
     // --- Extract vertex positions and indices for meshlet generation ---
     // We do this BEFORE buffer merging while accessors still point to valid data.
     std::vector<float> allPositions; // flat x,y,z
+    std::vector<float> allNormals;   // flat x,y,z
     std::vector<uint32_t> allIndices;
 
     // Helper lambda to get raw buffer pointer from a fastgltf buffer
@@ -237,6 +271,23 @@ void compile_gltf_model(const std::string& inputPath, const std::string& outputP
                     allPositions[prevSize + idx * 3 + 1] = pos.y();
                     allPositions[prevSize + idx * 3 + 2] = pos.z();
                 });
+            }
+            
+            auto normIt = prim.findAttribute("NORMAL");
+            if (normIt != prim.attributes.end()) {
+                auto& normAccessor = asset.accessors[normIt->accessorIndex];
+                size_t prevSize = allNormals.size();
+                allNormals.resize(prevSize + normAccessor.count * 3);
+                
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(asset, normAccessor, [&](fastgltf::math::fvec3 norm, std::size_t idx) {
+                    allNormals[prevSize + idx * 3 + 0] = norm.x();
+                    allNormals[prevSize + idx * 3 + 1] = norm.y();
+                    allNormals[prevSize + idx * 3 + 2] = norm.z();
+                });
+            } else if (posIt != prim.attributes.end()) {
+                // Fill with zeros if no normals exist
+                auto& posAccessor = asset.accessors[posIt->accessorIndex];
+                allNormals.resize(allNormals.size() + posAccessor.count * 3, 0.0f);
             }
 
             if (prim.indicesAccessor.has_value()) {
@@ -356,6 +407,10 @@ void compile_gltf_model(const std::string& inputPath, const std::string& outputP
 
     // --- Generate meshlets and append to GLB ---
     if (!allPositions.empty() && !allIndices.empty()) {
+        normalize_winding_order(allPositions.data(), sizeof(float) * 3,
+                                allNormals.empty() ? nullptr : allNormals.data(), sizeof(float) * 3,
+                                allIndices.data(), allIndices.size());
+                                
         generate_meshlets(allPositions.data(), sizeof(float) * 3,
                           allPositions.size() / 3,
                           allIndices.data(), allIndices.size(),
@@ -561,6 +616,10 @@ void compile_model(const std::string& inputPath, const std::string& outputPath) 
 
     // Generate meshlets and append to GLB
     if (!vertices.empty() && !indices.empty()) {
+        normalize_winding_order(vertices[0].pos, sizeof(Vertex),
+                                vertices[0].normal, sizeof(Vertex),
+                                indices.data(), indices.size());
+                                
         // Vertex struct has pos at offset 0, stride = sizeof(Vertex)
         generate_meshlets(vertices[0].pos, sizeof(Vertex),
                           vertices.size(),
@@ -571,9 +630,9 @@ void compile_model(const std::string& inputPath, const std::string& outputPath) 
 
 int main() {
     std::cerr << "[model_compiler] Starting...\n" << std::flush;
-    compile_gltf_model("assets/models/glb/triangle.glb", "assets/models/glb/triangle.glb");
-    compile_gltf_model("assets/models/glb/cube.glb", "assets/models/glb/cube.glb");
-    compile_gltf_model("assets/models/glb/boulder_01_1k.glb", "assets/models/glb/boulder_01_1k.glb");
+    compile_model("assets/models/obj/triangle.obj", "assets/models/glb/triangle.glb");
+    compile_model("assets/models/obj/cube.obj", "assets/models/glb/cube.glb");
+    compile_gltf_model("assets/models/obj/boulder_01_1k.gltf", "assets/models/glb/boulder_01_1k.glb");
     std::string inDir = "assets/models/obj";
     std::string outDir = "assets/models/glb";
 

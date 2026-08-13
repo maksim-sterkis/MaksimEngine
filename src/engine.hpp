@@ -35,9 +35,21 @@ struct EngineState {
   ImguiState imgui;
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
   VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;
+  VkSampler depthSampler = VK_NULL_HANDLE;
+  std::vector<std::vector<VkDescriptorSet>> hizDescriptorSets; // [frameInFlight][mipLevel]
+  std::vector<VkDescriptorSet> frameDescriptorSets; // [frameInFlight]
   std::vector<VkCommandBuffer> commandBuffers;
+  uint32_t currentImageIndex = 0;
+  bool triggerFreezeCopy = false;
 
   AspectMode aspectMode = AspectMode::ULTRAWIDE;
+  
+  std::vector<VkBuffer> statsBuffers;
+  std::vector<VkDeviceMemory> statsBuffersMemory;
+  std::vector<void*> statsMapped;
+  
+  uint64_t taskInvocations = 0;
+  uint64_t meshInvocations = 0;
 };
 
 namespace engine {

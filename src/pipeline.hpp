@@ -11,6 +11,8 @@ namespace vke {
 
 struct PushConstantData {
   glm::mat4 mvp;
+  glm::mat4 cull_mvp;
+  glm::vec4 cull_local_camera_pos;
   glm::vec4 colorOverride;
   int useOverride;
   int useTriplanar;
@@ -18,7 +20,8 @@ struct PushConstantData {
   int debugColors;
   uint32_t materialIndex;
   uint32_t meshletCount;
-  int padding[6];
+  int freezeCulling;
+  int padding[5];
 };
 
 struct PipelineConfigInfo {
@@ -44,6 +47,12 @@ struct PipelineState {
   VkShaderModule fragModule = VK_NULL_HANDLE;
   VkDescriptorSetLayout modelSetLayout = VK_NULL_HANDLE;
   VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSetLayout frameSetLayout = VK_NULL_HANDLE;
+
+  VkPipeline hizPipeline = VK_NULL_HANDLE;
+  VkPipelineLayout hizLayout = VK_NULL_HANDLE;
+  VkShaderModule hizModule = VK_NULL_HANDLE;
+  VkDescriptorSetLayout hizSetLayout = VK_NULL_HANDLE;
 };
 
 namespace pipeline {

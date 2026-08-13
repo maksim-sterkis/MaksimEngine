@@ -29,6 +29,17 @@ struct SwapchainState {
   VkImageView depthImageView = VK_NULL_HANDLE;
   VkFormat depthFormat;
 
+  std::vector<VkImage> hizImages;
+  std::vector<VkDeviceMemory> hizImageMemories;
+  std::vector<VkImageView> hizImageViews;
+  std::vector<std::vector<VkImageView>> hizMipImageViews;
+  uint32_t hizMipLevels = 1;
+
+  VkImage frozenHizImage = VK_NULL_HANDLE;
+  VkDeviceMemory frozenHizImageMemory = VK_NULL_HANDLE;
+  VkImageView frozenHizImageView = VK_NULL_HANDLE;
+
+
   bool vsync = false;
   bool disallowExclusive = false;
 };

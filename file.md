@@ -27,10 +27,9 @@ This document explains **every single file** in the `VK_game_engine` project and
 - **`src/texture.hpp` / `.cpp`**: Responsible for decoding images into VRAM. It can decode standard formats (PNG/JPG) from memory using `stb_image` and transition them correctly to `VK_FORMAT_R8G8B8A8_UNORM` layouts. It also creates the `VkSampler` objects.
 
 ## `shaders/` (GPU Programs)
-- **`shaders/shader.vert`**: The Vertex Shader. Multiplies the incoming vertex positions by the `mvp` matrix from PushConstants. Passes `fragUV` and `fragNormal` to the fragment shader. (Pending replacement by Mesh Shaders).
-- **`shaders/shader.frag`**: The Fragment Shader. Uses `push.materialIndex` to read the exact PBR coefficients from the `MaterialSSBO`. It samples the textures directly from the unbounded bindless array and applies the Cook-Torrance BRDF lighting math (Albedo, Normal mapping, Metallic/Roughness reflections).
-- **`shaders/shader.task`**: The Vulkan Task Shader. Dispatches meshlets to the Mesh Shader.
-- **`shaders/shader.mesh`**: The Vulkan Mesh Shader. Replaces the legacy Vertex Shader, reads vertex/triangle data from SSBOs, and outputs primitives to the Fragment Shader.
+- **`shaders/shader.vert` / `.frag` (Legacy)**: The old vertex-based pipeline. Uses `push.materialIndex` to read PBR coefficients from the `MaterialSSBO`, samples Bindless textures, and applies Cook-Torrance BRDF lighting. (Mostly deprecated in favor of Mesh Shaders).
+- **`shaders/shader.task`**: The Vulkan Task Shader. Evaluates meshlet bounding spheres against the camera frustum, tests for cone backface culling, and performs Hi-Z occlusion culling. Dispatches visible meshlets to the Mesh Shader and uses SSBO atomics for stats.
+- **`shaders/shader.mesh`**: The Vulkan Mesh Shader. Replaces the legacy Vertex Shader, reads tightly-packed `layout(scalar)` vertex/triangle data from SSBOs, and outputs visible primitives to the Fragment Shader for rendering.
 
 ## `tools/` (Offline Asset Pipeline)
 - **`tools/model_compiler.cpp`**: A standalone offline executable. It reads raw `.gltf` or `.obj` files, compresses their raw PNG/JPG textures into highly optimized formats (like KTX2 using `toktx`), packages them into a single, dense `.glb` binary payload, and calculates/appends **Meshlets** to the end of the file using `meshoptimizer`.

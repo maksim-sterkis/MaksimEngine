@@ -86,7 +86,7 @@ PipelineConfigInfo default_config_info() {
       VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
   config.depthStencilInfo.depthTestEnable = VK_TRUE;
   config.depthStencilInfo.depthWriteEnable = VK_TRUE;
-  config.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS;
+  config.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_GREATER;
   config.depthStencilInfo.depthBoundsTestEnable = VK_FALSE;
   config.depthStencilInfo.stencilTestEnable = VK_FALSE;
 
@@ -163,11 +163,40 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
     throw std::runtime_error("failed to create global descriptor set layout!");
   }
 
-  VkDescriptorSetLayout layouts[] = {state.modelSetLayout, state.globalSetLayout};
+  // Descriptor Set 2: Frame Data (Hi-Z pyramid)
+  std::vector<VkDescriptorSetLayoutBinding> frameBindings(3);
+  frameBindings[0].binding = 0;
+  frameBindings[0].descriptorCount = 1;
+  frameBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  frameBindings[0].pImmutableSamplers = nullptr;
+  frameBindings[0].stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT;
+
+  frameBindings[1].binding = 1;
+  frameBindings[1].descriptorCount = 1;
+  frameBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  frameBindings[1].pImmutableSamplers = nullptr;
+  frameBindings[1].stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT;
+
+  frameBindings[2].binding = 2;
+  frameBindings[2].descriptorCount = 1;
+  frameBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  frameBindings[2].pImmutableSamplers = nullptr;
+  frameBindings[2].stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
+
+  VkDescriptorSetLayoutCreateInfo frameLayoutInfo{};
+  frameLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  frameLayoutInfo.bindingCount = static_cast<uint32_t>(frameBindings.size());
+  frameLayoutInfo.pBindings = frameBindings.data();
+
+  if (vkCreateDescriptorSetLayout(device, &frameLayoutInfo, nullptr, &state.frameSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create frame descriptor set layout!");
+  }
+
+  VkDescriptorSetLayout layouts[] = {state.modelSetLayout, state.globalSetLayout, state.frameSetLayout};
 
   VkPipelineLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  layoutInfo.setLayoutCount = 2;
+  layoutInfo.setLayoutCount = 3;
   layoutInfo.pSetLayouts = layouts;
   layoutInfo.pushConstantRangeCount = 1;
   layoutInfo.pPushConstantRanges = &pushConstantRange;
@@ -248,9 +277,71 @@ void create(PipelineState &state, VkDevice device, VkRenderPass renderPass,
                                 nullptr, &state.pipeline) != VK_SUCCESS) {
     throw std::runtime_error("failed to create graphics pipeline!");
   }
+
+  // Hi-Z Compute Pipeline
+  std::vector<VkDescriptorSetLayoutBinding> hizBindings(2);
+  hizBindings[0].binding = 0;
+  hizBindings[0].descriptorCount = 1;
+  hizBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  hizBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  hizBindings[0].pImmutableSamplers = nullptr;
+
+  hizBindings[1].binding = 1;
+  hizBindings[1].descriptorCount = 1;
+  hizBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  hizBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  hizBindings[1].pImmutableSamplers = nullptr;
+
+  VkDescriptorSetLayoutCreateInfo hizLayoutInfo{};
+  hizLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  hizLayoutInfo.bindingCount = static_cast<uint32_t>(hizBindings.size());
+  hizLayoutInfo.pBindings = hizBindings.data();
+
+  if (vkCreateDescriptorSetLayout(device, &hizLayoutInfo, nullptr, &state.hizSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create hiz descriptor set layout!");
+  }
+
+  VkPushConstantRange hizPushConstant{};
+  hizPushConstant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  hizPushConstant.offset = 0;
+  hizPushConstant.size = sizeof(float) * 2 + sizeof(int);
+
+  VkPipelineLayoutCreateInfo hizPipelineLayoutInfo{};
+  hizPipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  hizPipelineLayoutInfo.setLayoutCount = 1;
+  hizPipelineLayoutInfo.pSetLayouts = &state.hizSetLayout;
+  hizPipelineLayoutInfo.pushConstantRangeCount = 1;
+  hizPipelineLayoutInfo.pPushConstantRanges = &hizPushConstant;
+
+  if (vkCreatePipelineLayout(device, &hizPipelineLayoutInfo, nullptr, &state.hizLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create hiz pipeline layout!");
+  }
+
+  auto hizCode = read_file("shaders/hiz.comp.spv");
+  state.hizModule = create_shader_module(device, hizCode);
+
+  VkPipelineShaderStageCreateInfo hizStageInfo{};
+  hizStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  hizStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  hizStageInfo.module = state.hizModule;
+  hizStageInfo.pName = "main";
+
+  VkComputePipelineCreateInfo computePipelineInfo{};
+  computePipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  computePipelineInfo.layout = state.hizLayout;
+  computePipelineInfo.stage = hizStageInfo;
+
+  if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &computePipelineInfo, nullptr, &state.hizPipeline) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create hiz compute pipeline!");
+  }
 }
 
 void destroy(PipelineState &state, VkDevice device) {
+  vkDestroyShaderModule(device, state.hizModule, nullptr);
+  vkDestroyPipeline(device, state.hizPipeline, nullptr);
+  vkDestroyPipelineLayout(device, state.hizLayout, nullptr);
+  vkDestroyDescriptorSetLayout(device, state.hizSetLayout, nullptr);
+
   vkDestroyShaderModule(device, state.taskModule, nullptr);
   vkDestroyShaderModule(device, state.meshModule, nullptr);
   vkDestroyShaderModule(device, state.fragModule, nullptr);
@@ -258,6 +349,7 @@ void destroy(PipelineState &state, VkDevice device) {
   vkDestroyPipelineLayout(device, state.layout, nullptr);
   vkDestroyDescriptorSetLayout(device, state.modelSetLayout, nullptr);
   vkDestroyDescriptorSetLayout(device, state.globalSetLayout, nullptr);
+  vkDestroyDescriptorSetLayout(device, state.frameSetLayout, nullptr);
 }
 
 void bind(const PipelineState &state, VkCommandBuffer cmd) {

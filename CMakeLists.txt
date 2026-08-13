@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 project(VK_game_engine)
 
 set(CMAKE_CXX_STANDARD 20)
+add_compile_definitions(GLM_FORCE_DEPTH_ZERO_TO_ONE)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if (MSVC)
@@ -12,9 +13,10 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
   if (MINGW)
     add_compile_options(-mstackrealign)
-    add_compile_options(-DSIMDJSON_IMPLEMENTATION_HASWELL=0)
   endif()
 endif()
+
+add_compile_definitions(GLM_FORCE_DEPTH_ZERO_TO_ONE)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -26,7 +28,7 @@ if(NOT GLSLC)
     message(FATAL_ERROR "glslc not found. Please ensure Vulkan SDK is correctly installed.")
 endif()
 
-file(GLOB_RECURSE SHADERS "shaders/*.vert" "shaders/*.frag" "shaders/*.task" "shaders/*.mesh")
+file(GLOB_RECURSE SHADERS "shaders/*.vert" "shaders/*.frag" "shaders/*.task" "shaders/*.mesh" "shaders/*.comp")
 set(SPIRV_SHADERS "")
 foreach(SHADER ${SHADERS})
     get_filename_component(FILE_NAME ${SHADER} NAME)
@@ -137,7 +139,7 @@ add_dependencies(${PROJECT_NAME} run_texture_compiler)
 
 add_executable(model_compiler tools/model_compiler.cpp)
 target_include_directories(model_compiler PRIVATE ${stb_SOURCE_DIR})
-target_link_libraries(model_compiler PRIVATE tinyobjloader fastgltf::fastgltf ktx meshoptimizer)
+target_link_libraries(model_compiler PRIVATE tinyobjloader fastgltf::fastgltf ktx meshoptimizer glm)
 
 add_custom_target(run_model_compiler
     COMMAND model_compiler

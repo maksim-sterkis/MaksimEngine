@@ -1,0 +1,40 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inputDepth;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D outputDepth;
+
+layout(push_constant) uniform PushConstants {
+    vec2 invOutputSize;
+    int sourceMip;
+} push;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(outputDepth);
+    
+    if (pos.x >= outputSize.x || pos.y >= outputSize.y) {
+        return;
+    }
+    
+    vec2 uv = (vec2(pos) + 0.5) * push.invOutputSize;
+    
+    // We sample 4 texels from the previous mip level
+    // In Reverse-Z, 0.0 is far and 1.0 is near.
+    // Store the FURTHEST depth (min) per block for mathematically conservative
+    // culling. This ensures we never falsely cull a meshlet that is visible
+    // over a background pixel.
+    
+    vec2 offset = push.invOutputSize * 0.25; // Quarter of the output pixel size
+    
+    float d0 = textureLod(inputDepth, uv + vec2(-offset.x, -offset.y), push.sourceMip).r;
+    float d1 = textureLod(inputDepth, uv + vec2( offset.x, -offset.y), push.sourceMip).r;
+    float d2 = textureLod(inputDepth, uv + vec2(-offset.x,  offset.y), push.sourceMip).r;
+    float d3 = textureLod(inputDepth, uv + vec2( offset.x,  offset.y), push.sourceMip).r;
+    
+    // Find the furthest ACTUAL geometry (in Reverse-Z, min is furthest)
+    float minDepth = min(min(d0, d1), min(d2, d3));
+    
+    imageStore(outputDepth, pos, vec4(minDepth, 0.0, 0.0, 0.0));
+}
