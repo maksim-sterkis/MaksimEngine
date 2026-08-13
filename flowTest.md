@@ -1,3 +1,4 @@
+```mermaid
 graph TD
     %% Phase 1
     subgraph Step 1: Bootstrapping
@@ -33,15 +34,14 @@ graph TD
         Cmd --> BindSet[main.cpp: Bind Global Descriptor Set]
         BindSet --> Push[main.cpp: PushConstants]
         
-        %% Data feeding into rendering
         MVP -.->|Matrix Data| Push
         
         Push --> GPU[[GPU: Vertex/Mesh & Frag Shaders]]
         
-        %% Bindless reads
         Desc -.->|Reads Bindless Array| GPU
         SSBO -.->|Reads PBR Data| GPU
         
         GPU --> UI[imgui: Render Debug Overlay]
         UI --> Present[engine.cpp: Submit & Present]
     end
+```
