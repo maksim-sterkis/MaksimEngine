@@ -20,6 +20,9 @@ A modern Vulkan game engine written in C++20, designed with next-generation rend
 
 Check out the [full roadmap](roadmap.md) for detailed progress and upcoming milestones.
 
+## Code Architecture
+
+For a complete breakdown of every directory, component, and the GPU pipeline flow, see the [File Architecture Documentation](file.md).
 
 ## Images
 <img width="2251" height="1185" alt="Screenshot 2026-07-09 175616" src="https://github.com/user-attachments/assets/51e2e0f5-ec02-458e-b2f3-72a4e18ddf5e" />
